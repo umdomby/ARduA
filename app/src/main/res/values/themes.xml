@@ -1,0 +1,37 @@
+<!-- themes.xml -->
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.ARduA" parent="Theme.Material3.Dark">
+        <item name="colorPrimary">@color/green</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorPrimaryContainer">@color/dark_gray</item>
+        <item name="colorOnPrimaryContainer">@color/white</item>
+        <item name="colorSurface">@color/black</item>
+        <item name="colorOnSurface">@color/white</item>
+        <item name="colorSurfaceVariant">@color/medium_gray</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorBackgroundFloating">@color/black</item>
+        <item name="colorOnBackground">@color/white</item>
+        <item name="colorError">@color/red</item>
+        <item name="colorOnError">@color/white</item>
+        <item name="colorErrorContainer">@color/dark_gray</item>
+        <item name="colorOnErrorContainer">@color/red</item>
+        <item name="colorOutline">@color/light_gray</item>
+        <item name="materialButtonStyle">@style/Widget.ARduA.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.ARduA.Button.Outlined</item>
+    </style>
+
+    <style name="Widget.ARduA.Button" parent="Widget.Material3.Button">
+        <item name="backgroundTint">@color/red</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:padding">16dp</item>
+        <item name="android:minHeight">28dp</item>
+        <item name="cornerRadius">8dp</item>
+    </style>
+
+    <style name="Widget.ARduA.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="strokeColor">@color/red</item>
+        <item name="android:textColor">@color/red</item>
+    </style>
+</resources>

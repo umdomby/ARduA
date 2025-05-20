@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">ARduA</string>
+    <string name="save_room">Save room</string>
+    <string name="delete_room">Delete</string>
+    <string name="cannot_delete_last">Cannot delete the last room</string>
+    <string name="room_not_found">Room not found in list</string>
+    <string name="delete_confirm_title">Delete Room</string>
+    <string name="delete_confirm_message">Are you sure you want to delete room %1$s?</string>
+    <string name="delete_button">Delete</string>
+    <string name="cancel_button">Cancel</string>
+    <string name="room_name_hint">XXXX-XXXX-XXXX-XXXX</string>
+    <string name="start_button">START</string>
+    <string name="stop_button">STOP</string>
+    <string name="generate_button">Generate</string>
+    <string name="copy_button">Copy</string>
+    <string name="share_button">Share</string>
+</resources>
