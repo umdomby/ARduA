@@ -24,11 +24,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = false // Отключено для отладки
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
     compileOptions {
@@ -43,13 +46,15 @@ android {
         viewBinding = true
         dataBinding = true
     }
-    ndkVersion = "25.1.8937393"
+    ndkVersion = "28.1.13356709"
     buildToolsVersion = "35.0.0"
 }
 
 dependencies {
+    // WebRTC: Тестируем с официальной зависимостью
 
-    implementation(files("libs/webrtc.aar"))
+    //implementation(files("libs/libwebrtc.aar"))
+    implementation("io.github.webrtc-sdk:android:125.6422.07")
     // WebSocket
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
 
@@ -85,20 +90,4 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
 }

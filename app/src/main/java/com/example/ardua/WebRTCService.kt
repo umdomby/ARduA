@@ -309,30 +309,35 @@ class WebRTCService : Service() {
 
     private fun initializeWebRTC() {
         Log.d("WebRTCService", "Initializing new WebRTC connection")
-        cleanupWebRTCResources()
-        eglBase = EglBase.create()
-        isEglBaseReleased = false
-        val localView = SurfaceViewRenderer(this).apply {
-            init(eglBase.eglBaseContext, null)
-            setMirror(true)
-            setZOrderMediaOverlay(true)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+        try {
+            cleanupWebRTCResources()
+            eglBase = EglBase.create()
+            isEglBaseReleased = false
+            val localView = SurfaceViewRenderer(this).apply {
+                init(eglBase.eglBaseContext, null)
+                setMirror(true)
+                setZOrderMediaOverlay(true)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            }
+            remoteView = SurfaceViewRenderer(this).apply {
+                init(eglBase.eglBaseContext, null)
+                setZOrderMediaOverlay(true)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            }
+            webRTCClient = WebRTCClient(
+                context = this,
+                eglBase = eglBase,
+                localView = localView,
+                remoteView = remoteView,
+                observer = createPeerConnectionObserver()
+            )
+            webRTCClient.setVideoEncoderBitrate(300000, 400000, 500000)
+            Log.d("WebRTCService", "WebRTCClient initialized successfully")
+        } catch (e: Exception) {
+            Log.e("WebRTCService", "Failed to initialize WebRTCClient", e)
+            throw e // Или обработайте ошибку иначе
         }
-        remoteView = SurfaceViewRenderer(this).apply {
-            init(eglBase.eglBaseContext, null)
-            setZOrderMediaOverlay(true)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-        }
-        webRTCClient = WebRTCClient(
-            context = this,
-            eglBase = eglBase,
-            localView = localView,
-            remoteView = remoteView,
-            observer = createPeerConnectionObserver()
-        )
-        webRTCClient.setVideoEncoderBitrate(300000, 400000, 500000)
     }
-
     private fun createPeerConnectionObserver() = object : PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate?) {
             candidate?.let {

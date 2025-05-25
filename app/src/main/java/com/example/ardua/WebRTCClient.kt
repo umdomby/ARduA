@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import org.webrtc.*
-import org.webrtc.PeerConnectionFactory.InitializationOptions
 
 class WebRTCClient(
     private val context: Context,
@@ -24,6 +23,7 @@ class WebRTCClient(
         initializePeerConnectionFactory()
         peerConnection = createPeerConnection()
         if (peerConnection == null) {
+            Log.e("WebRTCClient", "Failed to create peer connection")
             throw IllegalStateException("Failed to create peer connection")
         }
         createLocalTracks()
@@ -31,11 +31,18 @@ class WebRTCClient(
 
     private fun initializePeerConnectionFactory() {
         // 1. Инициализация WebRTC
-        val initializationOptions = InitializationOptions.builder(context)
-            .setEnableInternalTracer(true)
-            .setFieldTrials("WebRTC-H264HighProfile/Enabled/")
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(initializationOptions)
+        try {
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(context)
+                    .setEnableInternalTracer(true)
+                    .setFieldTrials("WebRTC-H264HighProfile/Enabled/")
+                    .createInitializationOptions()
+            )
+            Log.d("WebRTCClient", "WebRTC library initialized successfully")
+        } catch (e: Exception) {
+            Log.e("WebRTCClient", "Failed to initialize WebRTC library", e)
+            throw e
+        }
 
         // 2. Создание фабрик кодеков
         val videoEncoderFactory = DefaultVideoEncoderFactory(
@@ -43,7 +50,6 @@ class WebRTCClient(
             true,  // enableIntelVp8Encoder
             true   // enableH264HighProfile
         )
-
         val videoDecoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
 
         // 3. Настройка опций
@@ -52,35 +58,49 @@ class WebRTCClient(
             disableNetworkMonitor = false
         }
 
-        // 4. Создание фабрики PeerConnection
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setOptions(options)
-            .setVideoEncoderFactory(videoEncoderFactory)
-            .setVideoDecoderFactory(videoDecoderFactory)
-            .createPeerConnectionFactory()
+        // 4. Создание PeerConnectionFactory
+        try {
+            peerConnectionFactory = PeerConnectionFactory.builder()
+                .setOptions(options)
+                .setVideoEncoderFactory(videoEncoderFactory)
+                .setVideoDecoderFactory(videoDecoderFactory)
+                .createPeerConnectionFactory()
+            Log.d("WebRTCClient", "PeerConnectionFactory created successfully")
+        } catch (e: Exception) {
+            Log.e("WebRTCClient", "Failed to create PeerConnectionFactory", e)
+            throw e
+        }
     }
 
     private fun createPeerConnection(): PeerConnection? {
-        val rtcConfig = PeerConnection.RTCConfiguration(
-            listOf(
-                PeerConnection.IceServer.builder("stun:ardua.site:3478").createIceServer(),
-                PeerConnection.IceServer.builder("turn:ardua.site:3478")
-                    .setUsername("user1")
-                    .setPassword("pass1")
-                    .createIceServer()
-            )
-        ).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-            iceTransportsType = PeerConnection.IceTransportsType.ALL
-            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
-            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-            tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.ENABLED
-            candidateNetworkPolicy = PeerConnection.CandidateNetworkPolicy.ALL
-            keyType = PeerConnection.KeyType.ECDSA
+        try {
+            val rtcConfig = PeerConnection.RTCConfiguration(
+                listOf(
+                    //PeerConnection.IceServer.builder("stun:ardua.site:3478").createIceServer(),
+                    PeerConnection.IceServer.builder("turn:ardua.site:3478")
+                        .setUsername("user1")
+                        .setPassword("pass1")
+                        .createIceServer()
+                )
+            ).apply {
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+                iceTransportsType = PeerConnection.IceTransportsType.ALL
+                bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+                rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+                tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.ENABLED
+                candidateNetworkPolicy = PeerConnection.CandidateNetworkPolicy.ALL
+                keyType = PeerConnection.KeyType.ECDSA
+            }
+            val peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, observer)
+            if (peerConnection == null) {
+                Log.e("WebRTCClient", "Failed to create PeerConnection")
+            }
+            return peerConnection
+        } catch (e: Exception) {
+            Log.e("WebRTCClient", "Error creating PeerConnection", e)
+            return null
         }
-
-        return peerConnectionFactory.createPeerConnection(rtcConfig, observer)
     }
 
     internal fun switchCamera(useBackCamera: Boolean) {
@@ -179,6 +199,7 @@ class WebRTCClient(
             Log.d("WebRTCClient", "Video track created successfully")
         } catch (e: Exception) {
             Log.e("WebRTCClient", "Error creating video track", e)
+            throw e
         }
     }
 
