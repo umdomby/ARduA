@@ -30,7 +30,6 @@ class WebRTCClient(
     }
 
     private fun initializePeerConnectionFactory() {
-        // 1. Инициализация WebRTC
         try {
             PeerConnectionFactory.initialize(
                 PeerConnectionFactory.InitializationOptions.builder(context)
@@ -44,21 +43,20 @@ class WebRTCClient(
             throw e
         }
 
-        // 2. Создание фабрик кодеков
         val videoEncoderFactory = DefaultVideoEncoderFactory(
             eglBase.eglBaseContext,
-            true,  // enableIntelVp8Encoder
-            true   // enableH264HighProfile
+            true, // enableIntelVp8Encoder
+            true  // enableH264HighProfile
         )
-        val videoDecoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+        val supportedCodecs = videoEncoderFactory.supportedCodecs
+        Log.d("WebRTCClient", "Supported video codecs: ${supportedCodecs.joinToString { "${it.name} " }}")
 
-        // 3. Настройка опций
+        val videoDecoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
         val options = PeerConnectionFactory.Options().apply {
             disableEncryption = false
             disableNetworkMonitor = false
         }
 
-        // 4. Создание PeerConnectionFactory
         try {
             peerConnectionFactory = PeerConnectionFactory.builder()
                 .setOptions(options)
@@ -296,11 +294,18 @@ class WebRTCClient(
                 }
             }
 
-            try {
-                peerConnectionFactory.dispose()
-                Log.d("WebRTCClient", "PeerConnectionFactory disposed")
-            } catch (e: Exception) {
-                Log.e("WebRTCClient", "Error disposing PeerConnectionFactory", e)
+            // Check if peerConnectionFactory is initialized and not yet disposed
+            if (::peerConnectionFactory.isInitialized) {
+                try {
+                    peerConnectionFactory.dispose()
+                    Log.d("WebRTCClient", "PeerConnectionFactory disposed")
+                } catch (e: IllegalStateException) {
+                    Log.w("WebRTCClient", "PeerConnectionFactory already disposed")
+                } catch (e: Exception) {
+                    Log.e("WebRTCClient", "Error disposing PeerConnectionFactory", e)
+                }
+            } else {
+                Log.d("WebRTCClient", "PeerConnectionFactory not initialized")
             }
         } catch (e: Exception) {
             Log.e("WebRTCClient", "Error in cleanup", e)
@@ -310,6 +315,9 @@ class WebRTCClient(
             localAudioTrack = null
             surfaceTextureHelper = null
             peerConnection = null
+//            if (::peerConnectionFactory.isInitialized) {
+//                peerConnectionFactory = null // Clear reference after disposal
+//            }
         }
     }
 }
