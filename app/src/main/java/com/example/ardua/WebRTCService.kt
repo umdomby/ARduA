@@ -347,12 +347,19 @@ class WebRTCService : Service() {
         }
 
         override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-            Log.d("WebRTCService", "ICE connection state: $state")
+            Log.d("WebRTCService", "ICE connection state changed to: $state")
             when (state) {
-                PeerConnection.IceConnectionState.CONNECTED ->
+                PeerConnection.IceConnectionState.CONNECTED -> {
                     updateNotification("Connection established")
-                PeerConnection.IceConnectionState.DISCONNECTED ->
+                }
+                PeerConnection.IceConnectionState.DISCONNECTED -> {
                     updateNotification("Connection lost")
+                    scheduleReconnect()
+                }
+                PeerConnection.IceConnectionState.FAILED -> {
+                    Log.e("WebRTCService", "ICE connection failed")
+                    scheduleReconnect()
+                }
                 else -> {}
             }
         }

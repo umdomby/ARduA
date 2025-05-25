@@ -76,7 +76,8 @@ class WebRTCClient(
         try {
             val rtcConfig = PeerConnection.RTCConfiguration(
                 listOf(
-                    //PeerConnection.IceServer.builder("stun:ardua.site:3478").createIceServer(),
+                    PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                    PeerConnection.IceServer.builder("stun:ardua.site:3478").createIceServer(),
                     PeerConnection.IceServer.builder("turn:ardua.site:3478")
                         .setUsername("user1")
                         .setPassword("pass1")
