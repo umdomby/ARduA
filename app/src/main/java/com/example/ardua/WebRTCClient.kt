@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import org.webrtc.*
+import android.content.SharedPreferences
 
 class WebRTCClient(
     private val context: Context,
@@ -18,6 +19,7 @@ class WebRTCClient(
     private var localAudioTrack: AudioTrack? = null
     internal var videoCapturer: VideoCapturer? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private val sharedPrefs: SharedPreferences = context.getSharedPreferences("WebRTCPrefs", Context.MODE_PRIVATE)
 
     init {
         initializePeerConnectionFactory()
@@ -114,6 +116,10 @@ class WebRTCClient(
                         capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
                             override fun onCameraSwitchDone(isFrontCamera: Boolean) {
                                 Log.d("WebRTCClient", "Switched to ${if (isFrontCamera) "front" else "back"} camera")
+                                // Сохраняем выбор камеры
+                                sharedPrefs.edit()
+                                    .putBoolean("useBackCamera", !isFrontCamera)
+                                    .apply()
                             }
 
                             override fun onCameraSwitchError(error: String) {
@@ -222,8 +228,12 @@ class WebRTCClient(
 
     private fun createCameraCapturer(): VideoCapturer? {
         val enumerator = Camera2Enumerator(context)
-        return enumerator.deviceNames.find { enumerator.isFrontFacing(it) }?.let {
-            Log.d("WebRTCClient", "Using front camera: $it")
+        val useBackCamera = sharedPrefs.getBoolean("useBackCamera", false)
+        Log.d("WebRTCClient", "Selecting camera, useBackCamera=$useBackCamera")
+        return enumerator.deviceNames.find {
+            if (useBackCamera) !enumerator.isFrontFacing(it) else enumerator.isFrontFacing(it)
+        }?.let {
+            Log.d("WebRTCClient", "Using ${if (useBackCamera) "back" else "front"} camera: $it")
             enumerator.createCapturer(it, null)
         } ?: enumerator.deviceNames.firstOrNull()?.let {
             Log.d("WebRTCClient", "Using first available camera: $it")
@@ -315,9 +325,6 @@ class WebRTCClient(
             localAudioTrack = null
             surfaceTextureHelper = null
             peerConnection = null
-//            if (::peerConnectionFactory.isInitialized) {
-//                peerConnectionFactory = null // Clear reference after disposal
-//            }
         }
     }
 }
