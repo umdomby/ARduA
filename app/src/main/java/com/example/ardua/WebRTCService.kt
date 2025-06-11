@@ -6,6 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.*
@@ -78,6 +81,10 @@ class WebRTCService : Service() {
     private var isConnectivityReceiverRegistered = false
 
     private var isEglBaseReleased = false
+
+    private lateinit var cameraManager: CameraManager
+    private var flashlightCameraId: String? = null
+    private var isFlashlightOn = false
 
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
@@ -267,6 +274,25 @@ class WebRTCService : Service() {
             initializeWebRTC()
             connectWebSocket()
             registerNetworkCallback()
+
+            cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            try {
+                // Ищем камеру с поддержкой фонарика
+                for (id in cameraManager.cameraIdList) {
+                    val characteristics = cameraManager.getCameraCharacteristics(id)
+                    val hasFlash = characteristics.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+                    if (hasFlash) {
+                        flashlightCameraId = findAvailableFlashlightCamera()
+                        Log.d("WebRTCService", "Камера с фонариком найдена: $id")
+                        break
+                    }
+                }
+                if (flashlightCameraId == null) {
+                    Log.w("WebRTCService", "Фонарик не найден на устройстве")
+                }
+            } catch (e: CameraAccessException) {
+                Log.e("WebRTCService", "Ошибка доступа к CameraManager: ${e.message}")
+            }
         } catch (e: Exception) {
             Log.e("WebRTCService", "Initialization failed", e)
             stopSelf()
@@ -346,6 +372,64 @@ class WebRTCService : Service() {
             isInitializing = false
         }
     }
+
+    private fun findAvailableFlashlightCamera(): String? {
+        try {
+            for (id in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(id)
+                val hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                if (hasFlash && lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                    return id
+                }
+            }
+        } catch (e: CameraAccessException) {
+            Log.e("WebRTCService", "Ошибка поиска камеры: ${e.message}")
+        }
+        return null
+    }
+
+    private fun isCameraAvailable(cameraId: String): Boolean {
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            characteristics != null
+        } catch (e: CameraAccessException) {
+            Log.e("WebRTCService", "Ошибка проверки доступности камеры: ${e.message}")
+            false
+        }
+    }
+    private fun checkFlashlightSupport(cameraId: String): Boolean {
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun toggleFlashlight() {
+        flashlightCameraId?.let { cameraId ->
+            if (!isCameraAvailable(cameraId) || !checkFlashlightSupport(cameraId)) {
+                Log.w("WebRTCService", "Фонарик не поддерживается на этой камере")
+                return
+            }
+
+            try {
+                isFlashlightOn = !isFlashlightOn
+                cameraManager.setTorchMode(cameraId, isFlashlightOn)
+                Log.d("WebRTCService", "Фонарик ${if (isFlashlightOn) "включен" else "выключен"}")
+            } catch (e: CameraAccessException) {
+                Log.e("WebRTCService", "Ошибка управления фонариком: ${e.message}")
+                when (e.reason) {
+                    CameraAccessException.CAMERA_IN_USE -> {
+                        Log.w("WebRTCService", "Камера занята, попробуйте позже")
+                    }
+                    else -> Log.e("WebRTCService", "Другая ошибка доступа к камере", e)
+                }
+            }
+        } ?: Log.w("WebRTCService", "Фонарик недоступен")
+    }
+
     private fun createPeerConnectionObserver() = object : PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate?) {
             candidate?.let {
@@ -599,6 +683,10 @@ class WebRTCService : Service() {
                         webRTCClient.switchCamera(useBackCamera)
                         sendCameraSwitchAck(useBackCamera)
                     }
+                }
+                "toggle_flashlight" -> {
+                    Log.d("WebRTCService", "Received toggle_flashlight command")
+                    handler.post { toggleFlashlight() }
                 }
                 else -> Log.w("WebRTCService", "Unknown message type")
             }
@@ -959,6 +1047,17 @@ class WebRTCService : Service() {
             }
             scheduleRestartWithWorkManager()
         }
+
+        if (isFlashlightOn) {
+            try {
+                flashlightCameraId?.let { cameraManager.setTorchMode(it, false) }
+                isFlashlightOn = false
+                Log.d("WebRTCService", "Фонарик выключен при завершении сервиса")
+            } catch (e: CameraAccessException) {
+                Log.e("WebRTCService", "Ошибка выключения фонарика: ${e.message}")
+            }
+        }
+
         super.onDestroy()
     }
 
