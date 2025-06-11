@@ -380,13 +380,16 @@ class WebRTCService : Service() {
                 val hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
                 val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
                 if (hasFlash && lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                    Log.d("WebRTCService", "Тыльная камера с фонариком: $id")
                     return id
                 }
             }
+            Log.w("WebRTCService", "Камера с фонариком не найдена")
+            return null
         } catch (e: CameraAccessException) {
             Log.e("WebRTCService", "Ошибка поиска камеры: ${e.message}")
+            return null
         }
-        return null
     }
 
     private fun isCameraAvailable(cameraId: String): Boolean {
@@ -398,36 +401,77 @@ class WebRTCService : Service() {
             false
         }
     }
-    private fun checkFlashlightSupport(cameraId: String): Boolean {
-        return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
-        } catch (e: Exception) {
-            false
-        }
-    }
 
     private fun toggleFlashlight() {
-        flashlightCameraId?.let { cameraId ->
-            if (!isCameraAvailable(cameraId) || !checkFlashlightSupport(cameraId)) {
-                Log.w("WebRTCService", "Фонарик не поддерживается на этой камере")
-                return
+        flashlightCameraId = findAvailableFlashlightCamera()
+        if (flashlightCameraId == null) {
+            Log.w("WebRTCService", "Фонарик недоступен")
+            return
+        }
+
+        val sharedPrefs = getSharedPreferences("WebRTCPrefs", Context.MODE_PRIVATE)
+        val useBackCamera = sharedPrefs.getBoolean("useBackCamera", false)
+        Log.d("WebRTCService", "Начало переключения фонарика, cameraId: $flashlightCameraId, isCameraAvailable: ${isCameraAvailable(flashlightCameraId!!)}, useBackCamera: $useBackCamera, isFlashlightOn: $isFlashlightOn")
+
+        try {
+            // Если включаем фонарик и используем тыльную камеру, останавливаем захват
+            if (!isFlashlightOn && useBackCamera) {
+                Log.d("WebRTCService", "Остановка захвата видео для тыльной камеры")
+                webRTCClient.videoCapturer?.stopCapture()
             }
 
-            try {
-                isFlashlightOn = !isFlashlightOn
-                cameraManager.setTorchMode(cameraId, isFlashlightOn)
-                Log.d("WebRTCService", "Фонарик ${if (isFlashlightOn) "включен" else "выключен"}")
-            } catch (e: CameraAccessException) {
-                Log.e("WebRTCService", "Ошибка управления фонариком: ${e.message}")
-                when (e.reason) {
-                    CameraAccessException.CAMERA_IN_USE -> {
-                        Log.w("WebRTCService", "Камера занята, попробуйте позже")
+            // Задержка для освобождения камеры или немедленное действие для фронтальной камеры
+            handler.postDelayed({
+                try {
+                    isFlashlightOn = !isFlashlightOn
+                    if (isCameraAvailable(flashlightCameraId!!)) {
+                        cameraManager.setTorchMode(flashlightCameraId!!, isFlashlightOn)
+                        Log.d("WebRTCService", "Фонарик ${if (isFlashlightOn) "включен" else "выключен"}")
+                    } else {
+                        Log.w("WebRTCService", "Камера $flashlightCameraId недоступна, повторная попытка")
+                        handler.postDelayed({
+                            try {
+                                cameraManager.setTorchMode(flashlightCameraId!!, isFlashlightOn)
+                                Log.d("WebRTCService", "Фонарик ${if (isFlashlightOn) "включен" else "выключен"} после повторной попытки")
+                            } catch (e: CameraAccessException) {
+                                Log.e("WebRTCService", "Ошибка повторной попытки: ${e.message}, reason: ${e.reason}")
+                                isFlashlightOn = !isFlashlightOn
+                            }
+                        }, 200)
                     }
-                    else -> Log.e("WebRTCService", "Другая ошибка доступа к камере", e)
+
+                    // Возобновляем захват видео только если выключаем фонарик и используем тыльную камеру
+                    if (!isFlashlightOn && useBackCamera) {
+                        handler.postDelayed({
+                            try {
+                                webRTCClient.videoCapturer?.startCapture(640, 480, 20)
+                                Log.d("WebRTCService", "Возобновление захвата видео")
+                            } catch (e: Exception) {
+                                Log.e("WebRTCService", "Ошибка возобновления захвата: ${e.message}")
+                            }
+                        }, 500)
+                    }
+                } catch (e: CameraAccessException) {
+                    Log.e("WebRTCService", "Ошибка фонарика: ${e.message}, reason: ${e.reason}")
+                    isFlashlightOn = !isFlashlightOn
+                    // Возобновляем захват, если фонарик не включился и используем тыльную камеру
+                    if (!isFlashlightOn && useBackCamera) {
+                        handler.postDelayed({
+                            try {
+                                webRTCClient.videoCapturer?.startCapture(640, 480, 20)
+                                Log.d("WebRTCService", "Возобновление захвата после ошибки")
+                            } catch (startError: Exception) {
+                                Log.e("WebRTCService", "Ошибка возобновления захвата: ${startError.message}")
+                            }
+                        }, 500)
+                    }
                 }
-            }
-        } ?: Log.w("WebRTCService", "Фонарик недоступен")
+            }, if (useBackCamera && !isFlashlightOn) 500 else 0) // Задержка только для тыльной камеры при включении
+        } catch (e: Exception) {
+            Log.e("WebRTCService", "Общая ошибка: ${e.message}")
+        } finally {
+            Log.d("WebRTCService", "Завершение переключения фонарика, isFlashlightOn: $isFlashlightOn")
+        }
     }
 
     private fun createPeerConnectionObserver() = object : PeerConnection.Observer {
@@ -550,13 +594,16 @@ class WebRTCService : Service() {
         updateNotification("Reconnecting in ${delay/1000}s...")
 
         handler.postDelayed({
-            if (!isConnected && !isConnecting) {
-                Log.d("WebRTCService", "Executing reconnect attempt $reconnectAttempts")
-                reconnect()
-            } else {
-                Log.d("WebRTCService", "Already connected or connecting, skipping scheduled reconnect")
+            try {
+                isFlashlightOn = !isFlashlightOn
+                cameraManager.setTorchMode(flashlightCameraId!!, isFlashlightOn)
+                Log.d("WebRTCService", "Фонарик ${if (isFlashlightOn) "включен" else "выключен"}")
+                webRTCClient.videoCapturer?.startCapture(640, 480, 20)
+            } catch (e: Exception) {
+                Log.e("WebRTCService", "Ошибка фонарика: ${e.message}")
+                isFlashlightOn = !isFlashlightOn
             }
-        }, delay)
+        }, 2000)
     }
 
     private fun reconnect() {
