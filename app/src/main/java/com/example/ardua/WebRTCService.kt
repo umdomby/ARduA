@@ -67,7 +67,8 @@ class WebRTCService : Service() {
 
     private var roomName = "room1" // Будет перезаписано при старте
     private val userName = Build.MODEL ?: "AndroidDevice"
-    private val webSocketUrl = "wss://ardua.site/wsgo"
+    //private val webSocketUrl = "wss://ardua.site/wsgo"
+    private val webSocketUrl = "wss://ardua.site:444/wsgo"
 
     private val notificationId = 1
     private val channelId = "webrtc_service_channel"
