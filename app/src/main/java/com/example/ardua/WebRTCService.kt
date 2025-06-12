@@ -727,8 +727,19 @@ class WebRTCService : Service() {
                     val useBackCamera = message.optBoolean("useBackCamera", false)
                     Log.d("WebRTCService", "Received switch camera command: useBackCamera=$useBackCamera")
                     handler.post {
-                        webRTCClient.switchCamera(useBackCamera)
-                        sendCameraSwitchAck(useBackCamera)
+                        try {
+                            if (!::webRTCClient.isInitialized) {
+                                Log.e("WebRTCService", "WebRTCClient not initialized, cannot switch camera")
+                                sendCameraSwitchAck(useBackCamera, success = false)
+                                return@post
+                            }
+                            webRTCClient.switchCamera(useBackCamera)
+                            Log.d("WebRTCService", "Switch camera command executed for useBackCamera=$useBackCamera")
+                            sendCameraSwitchAck(useBackCamera)
+                        } catch (e: Exception) {
+                            Log.e("WebRTCService", "Error switching camera: ${e.message}")
+                            sendCameraSwitchAck(useBackCamera, success = false)
+                        }
                     }
                 }
                 "toggle_flashlight" -> {
@@ -881,19 +892,19 @@ class WebRTCService : Service() {
         }, desc)
     }
 
-    private fun sendCameraSwitchAck(useBackCamera: Boolean) {
+    private fun sendCameraSwitchAck(useBackCamera: Boolean, success: Boolean = true) {
         try {
             val message = JSONObject().apply {
                 put("type", "switch_camera_ack")
                 put("useBackCamera", useBackCamera)
-                put("success", true)
+                put("success", success)
                 put("room", roomName)
                 put("username", userName)
             }
             webSocketClient.send(message.toString())
-            Log.d("WebRTCService", "Sent camera switch ack")
+            Log.d("WebRTCService", "Sent camera switch ack: success=$success, useBackCamera=$useBackCamera")
         } catch (e: Exception) {
-            Log.e("WebRTCService", "Error sending camera switch ack", e)
+            Log.e("WebRTCService", "Error sending camera switch ack: ${e.message}")
         }
     }
 
