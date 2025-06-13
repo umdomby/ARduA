@@ -342,7 +342,7 @@ class WebRTCService : Service() {
         isInitializing = true
         Log.d("WebRTCService", "Initializing new WebRTC connection")
         try {
-            cleanupWebRTCResources() // Ensure resources are cleaned before initializing
+            cleanupWebRTCResources()
             eglBase = EglBase.create()
             isEglBaseReleased = false
             val localView = SurfaceViewRenderer(this).apply {
@@ -364,7 +364,8 @@ class WebRTCService : Service() {
                 observer = createPeerConnectionObserver()
             )
             webRTCClient.setVideoEncoderBitrate(300000, 400000, 500000)
-            Log.d("WebRTCService", "WebRTCClient initialized successfully")
+            Log.d("WebRTCService", "WebRTCClient initialized, peerConnection state: ${webRTCClient.peerConnection?.signalingState()}")
+            Log.d("WebRTCService", "Video capturer initialized: ${webRTCClient.videoCapturer != null}")
         } catch (e: Exception) {
             Log.e("WebRTCService", "Failed to initialize WebRTCClient", e)
             throw e
@@ -572,7 +573,13 @@ class WebRTCService : Service() {
 
         isConnecting = true
         webSocketClient = WebSocketClient(webSocketListener)
-        webSocketClient.connect(webSocketUrl)
+        try {
+            webSocketClient.connect(webSocketUrl)
+        } catch (e: Exception) {
+            Log.e("WebRTCService", "Error connecting WebSocket", e)
+            isConnecting = false
+            scheduleReconnect()
+        }
     }
 
     private fun scheduleReconnect() {
@@ -594,16 +601,8 @@ class WebRTCService : Service() {
         updateNotification("Reconnecting in ${delay/1000}s...")
 
         handler.postDelayed({
-            try {
-                isFlashlightOn = !isFlashlightOn
-                cameraManager.setTorchMode(flashlightCameraId!!, isFlashlightOn)
-                Log.d("WebRTCService", "Фонарик ${if (isFlashlightOn) "включен" else "выключен"}")
-                webRTCClient.videoCapturer?.startCapture(640, 480, 20)
-            } catch (e: Exception) {
-                Log.e("WebRTCService", "Ошибка фонарика: ${e.message}")
-                isFlashlightOn = !isFlashlightOn
-            }
-        }, 2000)
+            reconnect()
+        }, delay)
     }
 
     private fun reconnect() {
@@ -612,6 +611,7 @@ class WebRTCService : Service() {
             return
         }
 
+        Log.d("WebRTCService", "Starting reconnect process, attempt: $reconnectAttempts")
         handler.post {
             try {
                 Log.d("WebRTCService", "Starting reconnect process")
