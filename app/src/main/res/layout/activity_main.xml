@@ -135,12 +135,23 @@
             app:iconTint="?attr/colorOnSecondaryContainer"/>
 
         <Button
+            android:id="@+id/toggleVideoButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Video"
+            android:layout_marginStart="8dp"
+            app:icon="@drawable/ic_play"
+            app:iconTint="?attr/colorOnSecondaryContainer"/>
+
+        <Button
             android:id="@+id/stopButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Stop"
             android:backgroundTint="@color/red"
+            android:layout_marginStart="8dp"
             app:icon="@drawable/ic_stop"
             app:iconTint="?attr/colorOnSecondaryContainer"/>
     </LinearLayout>

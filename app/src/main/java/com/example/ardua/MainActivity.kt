@@ -215,6 +215,14 @@ class MainActivity : ComponentActivity() {
             }
         })
 
+        binding.toggleVideoButton.setOnClickListener {
+            if (remoteVideoDialog?.isShowing == true) {
+                cleanupRemoteVideo()
+            } else {
+                showRemoteVideoDialog()
+            }
+        }
+
         binding.generateCodeButton.setOnClickListener {
             currentRoomName = generateRandomRoomName()
             binding.roomCodeEditText.setText(formatRoomName(currentRoomName))
