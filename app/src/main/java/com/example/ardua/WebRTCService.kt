@@ -523,10 +523,14 @@ class WebRTCService : Service() {
                     when (track.kind()) {
                         "video" -> {
                             Log.d("WebRTCService", "Video track received, ID: ${track.id()}, Enabled: ${track.enabled()}")
+                            // Очищаем старый трек, если он есть
+                            remoteView.clearImage()
                             (track as VideoTrack).addSink(remoteView)
+                            Log.d("WebRTCService", "Added video track to remoteView")
                         }
                         "audio" -> {
                             Log.d("WebRTCService", "Audio track received, ID: ${track.id()}")
+                            // Аудиотрек автоматически воспроизводится, дополнительная обработка не требуется
                         }
                     }
                 }
@@ -915,11 +919,25 @@ class WebRTCService : Service() {
                 SessionDescription.Type.OFFER,
                 sdp.getString("sdp")
             )
+            val preferredCodec = "VP8" // Используем только VP8
 
-            val preferredCodec = offer.optString("preferredCodec", "H264")
+            Log.d("WebRTCService", "Received offer: ${sessionDescription.description}")
+
+            // Проверяем наличие аудиотрека в SDP
+            if (!sessionDescription.description.contains("m=audio")) {
+                Log.w("WebRTCService", "Offer SDP does not contain audio section")
+            }
+
+            // Проверяем, не закрыто ли соединение
+            if (webRTCClient.peerConnection?.signalingState() == PeerConnection.SignalingState.CLOSED) {
+                Log.e("WebRTCService", "PeerConnection is closed, reinitializing")
+                cleanupWebRTCResources()
+                initializeWebRTC()
+            }
 
             webRTCClient.peerConnection?.setRemoteDescription(object : SdpObserver {
                 override fun onSetSuccess() {
+                    Log.d("WebRTCService", "Remote description set successfully for offer")
                     val constraints = MediaConstraints().apply {
                         mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
                         mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
@@ -929,12 +947,22 @@ class WebRTCService : Service() {
 
                 override fun onSetFailure(error: String) {
                     Log.e("WebRTCService", "Error setting remote description: $error")
+                    handler.postDelayed({
+                        cleanupWebRTCResources()
+                        initializeWebRTC()
+                        createOffer(preferredCodec)
+                    }, 2000)
                 }
                 override fun onCreateSuccess(p0: SessionDescription?) {}
                 override fun onCreateFailure(error: String) {}
             }, sessionDescription)
         } catch (e: Exception) {
             Log.e("WebRTCService", "Error handling offer", e)
+            handler.postDelayed({
+                cleanupWebRTCResources()
+                initializeWebRTC()
+                createOffer("VP8")
+            }, 2000)
         }
     }
 
@@ -951,8 +979,8 @@ class WebRTCService : Service() {
                     val modifiedSdp = normalizeSdpForCodec(desc.description, preferredCodec, 300)
                     Log.d("WebRTCService", "Modified Local Answer SDP:\n$modifiedSdp")
 
-                    if (!isValidSdp(modifiedSdp, preferredCodec)) {
-                        Log.e("WebRTCService", "Invalid modified SDP, falling back to original")
+                    if (!isValidSdp(modifiedSdp, preferredCodec) || !modifiedSdp.contains("m=audio")) {
+                        Log.e("WebRTCService", "Invalid modified SDP or no audio section, falling back to original")
                         setLocalDescription(desc)
                         return
                     }
@@ -963,6 +991,11 @@ class WebRTCService : Service() {
 
                 override fun onCreateFailure(error: String?) {
                     Log.e("WebRTCService", "Error creating answer: $error")
+                    handler.postDelayed({
+                        cleanupWebRTCResources()
+                        initializeWebRTC()
+                        createOffer(preferredCodec)
+                    }, 2000)
                 }
 
                 override fun onSetSuccess() {}
@@ -970,6 +1003,11 @@ class WebRTCService : Service() {
             }, constraints)
         } catch (e: Exception) {
             Log.e("WebRTCService", "Error creating answer", e)
+            handler.postDelayed({
+                cleanupWebRTCResources()
+                initializeWebRTC()
+                createOffer(preferredCodec)
+            }, 2000)
         }
     }
 
