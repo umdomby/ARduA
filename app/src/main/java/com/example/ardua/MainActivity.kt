@@ -21,8 +21,10 @@ import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.ArrayAdapter
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.registerForActivityResult
@@ -468,15 +470,29 @@ class MainActivity : ComponentActivity() {
         }
         Log.d("MainActivity", "Creating new remote video dialog")
         cleanupRemoteVideo()
+
         remoteView = WebRTCService.sharedRemoteView
         if (remoteView == null) {
             Log.e("MainActivity", "sharedRemoteView is null, cannot create dialog")
             showToast("Ошибка инициализации видео")
             return
         }
+
+        // Удаляем remoteView из текущего родителя, если он есть
+        (remoteView?.parent as? ViewGroup)?.removeView(remoteView)
+
+        // Создаём контейнер для remoteView
+        val container = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+            addView(remoteView)
+        }
+
         remoteVideoDialog = MaterialAlertDialogBuilder(this)
             .setTitle("Удалённое видео")
-            .setView(remoteView)
+            .setView(container) // Используем container вместо remoteView напрямую
             .setPositiveButton("Закрыть") { _, _ ->
                 Log.d("MainActivity", "Closing remote video dialog via button")
                 cleanupRemoteVideo()
@@ -486,20 +502,20 @@ class MainActivity : ComponentActivity() {
                 cleanupRemoteVideo()
             }
             .create()
+
         try {
             remoteVideoDialog?.show()
             Log.d("MainActivity", "Remote video dialog shown")
+            handler.postDelayed({
+                val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+                sendBroadcast(intent)
+                Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast after delay")
+            }, 1000)
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to show remote video dialog: ${e.message}")
             showToast("Ошибка отображения диалога")
             cleanupRemoteVideo()
-            return
         }
-        handler.postDelayed({
-            val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
-            sendBroadcast(intent)
-            Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast after delay")
-        }, 1000)
     }
 
     private fun cleanupRemoteVideo() {
