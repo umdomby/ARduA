@@ -2,7 +2,6 @@ package com.example.ardua
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -15,22 +14,28 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
-import android.view.View
 import android.view.WindowManager
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.registerForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import com.example.ardua.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.json.JSONArray
+import org.webrtc.EglBase
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 import java.util.*
 import kotlin.random.Random
 
@@ -41,6 +46,12 @@ class MainActivity : ComponentActivity() {
     private var isServiceRunning: Boolean = false
     private val roomList = mutableListOf<String>()
     private lateinit var roomListAdapter: ArrayAdapter<String>
+
+    private var remoteVideoDialog: androidx.appcompat.app.AlertDialog? = null
+    private var remoteView: SurfaceViewRenderer? = null
+    private var eglBase: EglBase? = null
+    private val handler = Handler(Looper.getMainLooper())
+
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.CAMERA,
@@ -87,11 +98,11 @@ class MainActivity : ComponentActivity() {
         setContentView(binding.root)
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        setupRemoteVideoReceiver() // Инициализация EglBase
         loadRoomList()
         setupUI()
         setupRoomListAdapter()
 
-        // Проверяем состояние сервиса при создании активности
         isServiceRunning = WebRTCService.isRunning
         updateButtonStates()
     }
@@ -283,6 +294,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun setupRemoteVideoReceiver() {
+        try {
+            eglBase = EglBase.create()
+            Log.d("MainActivity", "EglBase created successfully")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to create EglBase: ${e.message}")
+            showToast("Ошибка инициализации видео")
+        }
+    }
+
     private fun formatRoomName(name: String): String {
         if (name.length != 16) return name
 
@@ -402,6 +423,100 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val remoteVideoReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                "com.example.ardua.REMOTE_VIDEO_AVAILABLE" -> {
+                    val trackId = intent.getStringExtra("video_track_id") ?: "unknown"
+                    Log.d("MainActivity", "Received REMOTE_VIDEO_AVAILABLE for track: $trackId")
+                    if (remoteView == null || eglBase == null) {
+                        Log.w("MainActivity", "Cannot show remote video: remoteView=$remoteView, eglBase=$eglBase")
+                        handler.postDelayed({
+                            val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+                            sendBroadcast(intent)
+                            Log.d("MainActivity", "Retrying REQUEST_VIDEO_TRACK broadcast")
+                        }, 1000)
+                        return
+                    }
+                    handler.post { showRemoteVideoDialog() } // Запускаем на главном потоке
+                }
+                "com.example.ardua.REMOTE_VIDEO_LOST" -> {
+                    val trackId = intent.getStringExtra("video_track_id") ?: "unknown"
+                    Log.d("MainActivity", "Received REMOTE_VIDEO_LOST for track: $trackId")
+                    handler.post { cleanupRemoteVideo() } // Запускаем на главном потоке
+                }
+            }
+        }
+    }
+
+    private fun showRemoteVideoDialog() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            Log.w("MainActivity", "Activity is not resumed, skipping showRemoteVideoDialog")
+            return
+        }
+        if (remoteVideoDialog?.isShowing == true) {
+            Log.d("MainActivity", "Remote video dialog already showing")
+            return
+        }
+        Log.d("MainActivity", "Creating new remote video dialog")
+        cleanupRemoteVideo()
+        remoteView = WebRTCService.sharedRemoteView
+        if (remoteView == null) {
+            Log.e("MainActivity", "sharedRemoteView is null, cannot create dialog")
+            showToast("Ошибка инициализации видео")
+            return
+        }
+        remoteVideoDialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Удалённое видео")
+            .setView(remoteView)
+            .setPositiveButton("Закрыть") { _, _ ->
+                Log.d("MainActivity", "Closing remote video dialog via button")
+                cleanupRemoteVideo()
+            }
+            .setOnCancelListener {
+                Log.d("MainActivity", "Closing remote video dialog via cancel")
+                cleanupRemoteVideo()
+            }
+            .create()
+        try {
+            remoteVideoDialog?.show()
+            Log.d("MainActivity", "Remote video dialog shown")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to show remote video dialog: ${e.message}")
+            showToast("Ошибка отображения диалога")
+            cleanupRemoteVideo()
+            return
+        }
+        handler.postDelayed({
+            val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+            sendBroadcast(intent)
+            Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast after delay")
+        }, 1000)
+    }
+
+    private fun cleanupRemoteVideo() {
+        Log.d("MainActivity", "Cleaning up remote video resources")
+        remoteView?.apply {
+            try {
+                clearImage()
+                release()
+                Log.d("MainActivity", "SurfaceViewRenderer released")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error releasing SurfaceViewRenderer: ${e.message}")
+            }
+        }
+        remoteView = null
+        if (remoteVideoDialog?.isShowing == true) {
+            try {
+                remoteVideoDialog?.dismiss()
+                Log.d("MainActivity", "Remote video dialog dismissed")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error dismissing remote video dialog: ${e.message}")
+            }
+        }
+        remoteVideoDialog = null
+    }
+
     private val serviceStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == WebRTCService.ACTION_SERVICE_STATE) {
@@ -442,14 +557,32 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         registerReceiver(serviceStateReceiver, IntentFilter(WebRTCService.ACTION_SERVICE_STATE))
+        val videoFilter = IntentFilter().apply {
+            addAction("com.example.ardua.REMOTE_VIDEO_AVAILABLE")
+            addAction("com.example.ardua.REMOTE_VIDEO_LOST")
+        }
+        registerReceiver(remoteVideoReceiver, videoFilter)
         // Обновляем состояние при возвращении в активность
         isServiceRunning = WebRTCService.isRunning
         updateButtonStates()
+        // Запрашиваем текущий видеопоток
+        val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+        sendBroadcast(intent)
+        Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast on resume")
     }
 
     override fun onPause() {
         super.onPause()
         unregisterReceiver(serviceStateReceiver)
+        unregisterReceiver(remoteVideoReceiver)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cleanupRemoteVideo()
+        eglBase?.release()
+        eglBase = null
+        Log.d("MainActivity", "EglBase released")
     }
 
     companion object {

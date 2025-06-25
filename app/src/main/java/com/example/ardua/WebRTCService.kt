@@ -33,6 +33,7 @@ class WebRTCService : Service() {
         var currentRoomName = ""
         const val ACTION_SERVICE_STATE = "com.example.ardua.SERVICE_STATE"
         const val EXTRA_IS_RUNNING = "is_running"
+        var sharedRemoteView: SurfaceViewRenderer? = null // Добавляем sharedRemoteView
     }
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -85,6 +86,9 @@ class WebRTCService : Service() {
     private lateinit var cameraManager: CameraManager
     private var flashlightCameraId: String? = null
     private var isFlashlightOn = false
+
+    private var currentVideoTrack: VideoTrack? = null
+    private var isVideoTrackReceiverRegistered = false
 
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
@@ -170,6 +174,32 @@ class WebRTCService : Service() {
                 adjustVideoQualityBasedOnStats()
             }
             handler.postDelayed(this, 10000) // Каждые 10 секунд
+        }
+    }
+
+    private val videoTrackCheckRunnable = object : Runnable {
+        override fun run() {
+            if (isConnected && ::webRTCClient.isInitialized && webRTCClient.peerConnection != null) {
+                val hasVideoTrack = currentVideoTrack?.enabled() == true && currentVideoTrack?.state() == MediaStreamTrack.State.LIVE
+                Log.d("WebRTCService", "Video track check: hasVideoTrack=$hasVideoTrack, currentVideoTrack=$currentVideoTrack")
+                if (hasVideoTrack) {
+                    currentVideoTrack?.let { track ->
+                        sharedRemoteView?.clearImage()
+                        try {
+                            track.addSink(sharedRemoteView)
+                            Log.d("WebRTCService", "Reattached video track to sharedRemoteView: ${track.id()}")
+                        } catch (e: Exception) {
+                            Log.e("WebRTCService", "Error reattaching video track: ${e.message}")
+                        }
+                        sendVideoTrackBroadcast(track.id())
+                    }
+                } else {
+                    currentVideoTrack?.let { track ->
+                        sendVideoTrackLostBroadcast(track.id())
+                    }
+                }
+            }
+            handler.postDelayed(this, 5000)
         }
     }
 
@@ -264,11 +294,14 @@ class WebRTCService : Service() {
         Log.d("WebRTCService", "Service created with room: $roomName")
         sendServiceStateUpdate()
         handler.post(bandwidthEstimationRunnable)
+        handler.post(videoTrackCheckRunnable)
         try {
             registerReceiver(connectivityReceiver, IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION))
             isConnectivityReceiverRegistered = true
             registerReceiver(stateReceiver, IntentFilter(ACTION_SERVICE_STATE))
             isStateReceiverRegistered = true
+            registerReceiver(videoTrackReceiver, IntentFilter("com.example.ardua.REQUEST_VIDEO_TRACK"))
+            isVideoTrackReceiverRegistered = true
             createNotificationChannel()
             startForegroundService()
             initializeWebRTC()
@@ -351,16 +384,23 @@ class WebRTCService : Service() {
                 setZOrderMediaOverlay(true)
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             }
-            remoteView = SurfaceViewRenderer(this).apply {
-                init(eglBase.eglBaseContext, null)
-                setZOrderMediaOverlay(true)
-                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            sharedRemoteView = SurfaceViewRenderer(this).apply { // Заменяем remoteView
+                try {
+                    init(eglBase.eglBaseContext, null)
+                    setZOrderMediaOverlay(true)
+                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                    setEnableHardwareScaler(true)
+                    Log.d("WebRTCService", "sharedRemoteView initialized successfully")
+                } catch (e: Exception) {
+                    Log.e("WebRTCService", "Failed to initialize sharedRemoteView: ${e.message}")
+                    throw e
+                }
             }
             webRTCClient = WebRTCClient(
                 context = this,
                 eglBase = eglBase,
                 localView = localView,
-                remoteView = remoteView,
+                remoteView = sharedRemoteView!!,
                 observer = createPeerConnectionObserver()
             )
             webRTCClient.setVideoEncoderBitrate(300000, 400000, 500000)
@@ -501,44 +541,126 @@ class WebRTCService : Service() {
             }
         }
 
-        override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
-        override fun onIceConnectionReceivingChange(p0: Boolean) {}
-        override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
-        override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
         override fun onAddStream(stream: MediaStream?) {
+            Log.d("WebRTCService", "onAddStream called, stream=$stream")
             stream?.videoTracks?.forEach { track ->
-                Log.d("WebRTCService", "Adding remote video track from stream")
+                Log.d("WebRTCService", "onAddStream: Video track ID=${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
                 handler.post {
-                    track.addSink(remoteView)
+                    currentVideoTrack = track
+                    sharedRemoteView?.clearImage() // Заменяем remoteView
+                    try {
+                        track.addSink(sharedRemoteView)
+                        Log.d("WebRTCService", "Video track added to sharedRemoteView sink")
+                        sendVideoTrackBroadcast(track.id())
+                    } catch (e: Exception) {
+                        Log.e("WebRTCService", "Error adding video track to sink: ${e.message}")
+                    }
                 }
             }
+            stream?.audioTracks?.forEach { track ->
+                Log.d("WebRTCService", "onAddStream: Audio track ID=${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
+            }
+            if (stream?.videoTracks?.isEmpty() == true) {
+                Log.w("WebRTCService", "onAddStream: No video tracks in stream")
+            }
         }
-        override fun onRemoveStream(p0: MediaStream?) {}
-        override fun onDataChannel(p0: DataChannel?) {}
-        override fun onRenegotiationNeeded() {}
-        override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
+
         override fun onTrack(transceiver: RtpTransceiver?) {
             transceiver?.receiver?.track()?.let { track ->
+                Log.d("WebRTCService", "onTrack called, track kind=${track.kind()}, ID=${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
                 handler.post {
-                    when (track.kind()) {
-                        "video" -> {
-                            Log.d("WebRTCService", "Video track received, ID: ${track.id()}, Enabled: ${track.enabled()}")
-                            // Очищаем старый трек, если он есть
-                            remoteView.clearImage()
-                            (track as VideoTrack).addSink(remoteView)
-                            Log.d("WebRTCService", "Added video track to remoteView")
+                    if (track.kind() == "video") {
+                        currentVideoTrack = track as VideoTrack
+                        sharedRemoteView?.clearImage() // Заменяем remoteView
+                        try {
+                            (track as VideoTrack).addSink(sharedRemoteView)
+                            Log.d("WebRTCService", "Video track added to sharedRemoteView sink in onTrack")
+                            sendVideoTrackBroadcast(track.id())
+                        } catch (e: Exception) {
+                            Log.e("WebRTCService", "Error adding video track to sink in onTrack: ${e.message}")
                         }
-                        "audio" -> {
-                            Log.d("WebRTCService", "Audio track received, ID: ${track.id()}")
-                            // Аудиотрек автоматически воспроизводится, дополнительная обработка не требуется
-                        }
+                    } else if (track.kind() == "audio") {
+                        Log.d("WebRTCService", "Audio track received, ID=${track.id()}")
+                    }
+                }
+            } ?: Log.w("WebRTCService", "onTrack: No track received in transceiver")
+        }
+
+        override fun onRemoveStream(stream: MediaStream?) {
+            stream?.videoTracks?.forEach { track ->
+                Log.d("WebRTCService", "Removing remote video track: ${track.id()}")
+                handler.post {
+                    if (track == currentVideoTrack) {
+                        currentVideoTrack = null
+                        remoteView.clearImage()
+                        sendVideoTrackLostBroadcast(track.id())
                     }
                 }
             }
         }
+
+        override fun onSignalingChange(state: PeerConnection.SignalingState?) {
+            Log.d("WebRTCService", "Signaling state changed to: $state")
+        }
+
+        override fun onIceConnectionReceivingChange(receiving: Boolean) {
+            Log.d("WebRTCService", "ICE connection receiving change: $receiving")
+        }
+
+        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+            Log.d("WebRTCService", "ICE gathering state changed to: $state")
+        }
+
+        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {
+            Log.d("WebRTCService", "ICE candidates removed: ${candidates?.joinToString()}")
+        }
+
+        override fun onDataChannel(channel: DataChannel?) {
+            Log.d("WebRTCService", "Data channel created: ${channel?.label()}")
+        }
+
+        override fun onRenegotiationNeeded() {
+            Log.d("WebRTCService", "Renegotiation needed")
+        }
+
+        override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+            Log.d("WebRTCService", "onAddTrack called, receiver=$receiver, streams=$streams")
+        }
     }
+
+    private fun sendVideoTrackBroadcast(trackId: String) {
+        Log.d("WebRTCService", "Sending REMOTE_VIDEO_AVAILABLE broadcast for track: $trackId")
+        val intent = Intent("com.example.ardua.REMOTE_VIDEO_AVAILABLE")
+        intent.putExtra("video_track_id", trackId)
+        sendBroadcast(intent)
+    }
+
+    private fun sendVideoTrackLostBroadcast(trackId: String) {
+        Log.d("WebRTCService", "Sending REMOTE_VIDEO_LOST broadcast for track: $trackId")
+        val intent = Intent("com.example.ardua.REMOTE_VIDEO_LOST")
+        intent.putExtra("video_track_id", trackId)
+        sendBroadcast(intent)
+    }
+
+    private val videoTrackReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == "com.example.ardua.REQUEST_VIDEO_TRACK") {
+                Log.d("WebRTCService", "Received REQUEST_VIDEO_TRACK broadcast")
+                handler.post {
+                    currentVideoTrack?.let { track ->
+                        Log.d("WebRTCService", "Reattaching video track: ${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
+                        sharedRemoteView?.clearImage() // Заменяем remoteView
+                        track.addSink(sharedRemoteView)
+                        sendVideoTrackBroadcast(track.id())
+                    } ?: Log.w("WebRTCService", "No current video track to reattach")
+                }
+            }
+        }
+    }
+
     private var isCleaningUp = false
     private var isInitializing = false
+
 
     private fun cleanupWebRTCResources() {
         if (isCleaningUp) {
@@ -556,16 +678,32 @@ class WebRTCService : Service() {
                 isEglBaseReleased = true
                 Log.d("WebRTCService", "EglBase released")
             }
-            if (::remoteView.isInitialized) {
-                remoteView.clearImage()
-                remoteView.release()
-                Log.d("WebRTCService", "remoteView released")
+            if (sharedRemoteView != null) { // Заменяем remoteView
+                sharedRemoteView?.clearImage()
+                sharedRemoteView?.release()
+                Log.d("WebRTCService", "sharedRemoteView released")
+                currentVideoTrack = null
+                Log.d("WebRTCService", "Cleared current video track")
+                sharedRemoteView = null
             }
             Log.d("WebRTCService", "WebRTC resources cleaned up")
         } catch (e: Exception) {
             Log.e("WebRTCService", "Error cleaning WebRTC resources", e)
         } finally {
             isCleaningUp = false
+        }
+    }
+
+    private fun sendMessage(message: JSONObject) {
+        try {
+            if (::webSocketClient.isInitialized && webSocketClient.isConnected()) {
+                webSocketClient.send(message.toString())
+                Log.d("WebRTCService", "Sent message: $message")
+            } else {
+                Log.w("WebRTCService", "Cannot send message: WebSocket not connected")
+            }
+        } catch (e: Exception) {
+            Log.e("WebRTCService", "Error sending message", e)
         }
     }
 
@@ -693,24 +831,20 @@ class WebRTCService : Service() {
 
     private fun handleWebSocketMessage(message: JSONObject) {
         Log.d("WebRTCService", "Received: $message")
-
         try {
-            val isLeader = message.optBoolean("isLeader", false)
-
             when (message.optString("type")) {
                 "rejoin_and_offer" -> {
-                    Log.d("WebRTCService", "Received rejoin_and_offer with codec: ${message.optString("preferredCodec", "H264")}")
+                    Log.d("WebRTCService", "Received rejoin_and_offer with codec: VP8")
                     handler.post {
                         cleanupWebRTCResources()
                         initializeWebRTC()
-                        createOffer(message.optString("preferredCodec", "H264"))
+                        createOffer("VP8")
                     }
                 }
                 "create_offer_for_new_follower" -> {
                     Log.d("WebRTCService", "Received request to create offer for new follower")
-                    val preferredCodec = message.optString("preferredCodec", "H264")
                     handler.post {
-                        createOffer(preferredCodec)
+                        createOffer("VP8")
                     }
                 }
                 "bandwidth_estimation" -> {
@@ -718,15 +852,21 @@ class WebRTCService : Service() {
                     handleBandwidthEstimation(estimation)
                 }
                 "offer" -> {
-                    if (!isLeader) {
-                        Log.w("WebRTCService", "Received offer from non-leader, ignoring")
-                        return
-                    }
+                    // Удаляем проверку isLeader
                     handleOffer(message)
                 }
                 "answer" -> handleAnswer(message)
                 "ice_candidate" -> handleIceCandidate(message)
                 "room_info" -> {}
+                "track_received" -> {
+                    val data = message.getJSONObject("data")
+                    val trackId = data.getString("trackId")
+                    val kind = data.getString("kind")
+                    Log.d("WebRTCService", "Track received: trackId=$trackId, kind=$kind")
+                    if (kind == "video") {
+                        sendVideoTrackBroadcast(trackId)
+                    }
+                }
                 "switch_camera" -> {
                     val useBackCamera = message.optBoolean("useBackCamera", false)
                     Log.d("WebRTCService", "Received switch camera command: useBackCamera=$useBackCamera")
@@ -765,112 +905,106 @@ class WebRTCService : Service() {
             Log.e("WebRTCService", "No video section found in SDP")
             return sdp
         }
-
-        // Extract payload types for the video section
         val videoLineParts = lines[videoSectionIndex].split(" ")
         if (videoLineParts.size < 4) {
             Log.e("WebRTCService", "Invalid video section: ${lines[videoSectionIndex]}")
             return sdp
         }
-
         val payloadTypes = videoLineParts.drop(3)
         var targetPayloadType: String? = null
-        var targetPayloadIndex: Int? = null
-
-        // Find the target codec in rtpmap
         for (i in lines.indices) {
             if (lines[i].startsWith("a=rtpmap:") && lines[i].contains(targetCodec, ignoreCase = true)) {
                 val parts = lines[i].split(" ")
                 if (parts.size >= 2) {
                     targetPayloadType = parts[0].substringAfter("a=rtpmap:").substringBefore(" ")
-                    targetPayloadIndex = i
                     break
                 }
             }
         }
-
         if (targetPayloadType == null) {
             Log.w("WebRTCService", "$targetCodec not found in SDP, leaving SDP unchanged")
             return sdp
         }
-
-        // Ensure target codec is first in the payload list
         val newPayloadTypes = mutableListOf(targetPayloadType).apply {
             addAll(payloadTypes.filter { it != targetPayloadType })
         }
-        lines[videoSectionIndex] = videoLineParts.take(3).joinToString(" ") + " " + newPayloadTypes.joinToString(" ")
-
-        // Add bitrate constraints
+        lines[videoSectionIndex] = "${videoLineParts.take(3).joinToString(" ")} ${newPayloadTypes.joinToString(" ")}"
         if (targetBitrateAs > 0) {
             val bLine = "b=AS:$targetBitrateAs"
-            val insertIndex = videoSectionIndex + 1
             if (!lines.contains(bLine)) {
-                lines.add(insertIndex, bLine)
+                lines.add(videoSectionIndex + 1, bLine)
                 Log.d("WebRTCService", "Added bitrate constraint: $bLine")
             }
         }
-
+        // Проверяем наличие rtcp-fb
+        val rtcpFb = lines.filter { it.startsWith("a=rtcp-fb:$targetPayloadType") }
+        if (rtcpFb.isEmpty()) {
+            lines.add(videoSectionIndex + 2, "a=rtcp-fb:$targetPayloadType ccm fir")
+            lines.add(videoSectionIndex + 3, "a=rtcp-fb:$targetPayloadType nack")
+            lines.add(videoSectionIndex + 4, "a=rtcp-fb:$targetPayloadType nack pli")
+            Log.d("WebRTCService", "Added rtcp-fb for $targetPayloadType")
+        }
         val modifiedSdp = lines.joinToString("\r\n")
         Log.d("WebRTCService", "Modified SDP:\n$modifiedSdp")
         return modifiedSdp
     }
 
-    private fun createOffer(preferredCodec: String = "H264") {
+    private fun createOffer(preferredCodec: String = "VP8") {
         try {
             if (!::webRTCClient.isInitialized || !isConnected || webRTCClient.peerConnection == null) {
-                Log.e("WebRTCService", "Cannot create offer - not initialized, not connected, or PeerConnection is null");
-                return;
+                Log.e("WebRTCService", "Cannot create offer - not initialized, not connected, or PeerConnection is null")
+                return
             }
 
-            Log.d("WebRTCService", "Creating offer with preferred codec: $preferredCodec, PeerConnection state: ${webRTCClient.peerConnection?.signalingState()}");
+            Log.d("WebRTCService", "Creating offer with preferred codec: VP8, PeerConnection state: ${webRTCClient.peerConnection?.signalingState()}")
             if (webRTCClient.peerConnection?.signalingState() == PeerConnection.SignalingState.CLOSED) {
-                Log.e("WebRTCService", "PeerConnection is closed, reinitializing WebRTC");
-                cleanupWebRTCResources();
-                initializeWebRTC();
+                Log.e("WebRTCService", "PeerConnection is closed, reinitializing")
+                cleanupWebRTCResources()
+                initializeWebRTC()
             }
 
             val constraints = MediaConstraints().apply {
-                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"));
-                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"));
-                mandatory.add(MediaConstraints.KeyValuePair("googCpuOveruseDetection", "true"));
-                mandatory.add(MediaConstraints.KeyValuePair("googScreencastMinBitrate", "300"));
-            };
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googCpuOveruseDetection", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googScreencastMinBitrate", "300"))
+            }
 
             webRTCClient.peerConnection?.createOffer(object : SdpObserver {
                 override fun onCreateSuccess(desc: SessionDescription?) {
                     if (desc == null) {
-                        Log.e("WebRTCService", "Created SessionDescription is NULL");
-                        return;
+                        Log.e("WebRTCService", "Created SessionDescription is NULL")
+                        return
                     }
 
-                    Log.d("WebRTCService", "Original Local Offer SDP:\n${desc.description}");
-                    val modifiedSdp = normalizeSdpForCodec(desc.description, preferredCodec, 300);
-                    Log.d("WebRTCService", "Modified Local Offer SDP:\n$modifiedSdp");
+                    Log.d("WebRTCService", "Original Local Offer SDP:\n${desc.description}")
+                    val modifiedSdp = normalizeSdpForCodec(desc.description, "VP8", 300)
+                    Log.d("WebRTCService", "Modified Local Offer SDP:\n$modifiedSdp")
 
-                    if (!isValidSdp(modifiedSdp, preferredCodec)) {
-                        Log.e("WebRTCService", "Invalid modified SDP, falling back to original");
-                        setLocalDescription(desc);
-                        return;
+                    if (!isValidSdp(modifiedSdp, "VP8")) {
+                        Log.e("WebRTCService", "Invalid modified SDP, falling back to original")
+                        setLocalDescription(desc)
+                        return
                     }
 
-                    val modifiedDesc = SessionDescription(desc.type, modifiedSdp);
-                    setLocalDescription(modifiedDesc);
+                    val modifiedDesc = SessionDescription(desc.type, modifiedSdp)
+                    setLocalDescription(modifiedDesc)
                 }
 
                 override fun onCreateFailure(error: String?) {
-                    Log.e("WebRTCService", "Error creating offer: $error");
+                    Log.e("WebRTCService", "Error creating offer: $error")
                 }
 
                 override fun onSetSuccess() {
-                    Log.d("WebRTCService", "Offer created successfully");
+                    Log.d("WebRTCService", "Offer created successfully")
                 }
 
                 override fun onSetFailure(error: String?) {
-                    Log.e("WebRTCService", "Error setting offer: $error");
+                    Log.e("WebRTCService", "Error setting offer: $error")
                 }
-            }, constraints);
+            }, constraints)
         } catch (e: Exception) {
-            Log.e("WebRTCService", "Error in createOffer", e);
+            Log.e("WebRTCService", "Error in createOffer", e)
         }
     }
 
@@ -915,22 +1049,26 @@ class WebRTCService : Service() {
     private fun handleOffer(offer: JSONObject) {
         try {
             val sdp = offer.getJSONObject("sdp")
+            val sdpString = sdp.getString("sdp")
+            if (!sdpString.contains("m=video")) {
+                Log.e("WebRTCService", "Offer SDP lacks video section: $sdpString")
+                return
+            }
             val sessionDescription = SessionDescription(
                 SessionDescription.Type.OFFER,
-                sdp.getString("sdp")
+                sdpString
             )
-            val preferredCodec = "VP8" // Используем только VP8
+            val preferredCodec = "VP8"
 
             Log.d("WebRTCService", "Received offer: ${sessionDescription.description}")
+            Log.d("WebRTCService", "PeerConnection state before setting offer: ${webRTCClient.peerConnection?.signalingState()}")
 
-            // Проверяем наличие аудиотрека в SDP
             if (!sessionDescription.description.contains("m=audio")) {
                 Log.w("WebRTCService", "Offer SDP does not contain audio section")
             }
 
-            // Проверяем, не закрыто ли соединение
-            if (webRTCClient.peerConnection?.signalingState() == PeerConnection.SignalingState.CLOSED) {
-                Log.e("WebRTCService", "PeerConnection is closed, reinitializing")
+            if (webRTCClient.peerConnection == null || webRTCClient.peerConnection?.signalingState() == PeerConnection.SignalingState.CLOSED) {
+                Log.e("WebRTCService", "PeerConnection is null or closed, reinitializing")
                 cleanupWebRTCResources()
                 initializeWebRTC()
             }
@@ -950,7 +1088,7 @@ class WebRTCService : Service() {
                     handler.postDelayed({
                         cleanupWebRTCResources()
                         initializeWebRTC()
-                        createOffer(preferredCodec)
+                        createOffer("VP8")
                     }, 2000)
                 }
                 override fun onCreateSuccess(p0: SessionDescription?) {}
@@ -966,38 +1104,44 @@ class WebRTCService : Service() {
         }
     }
 
-    private fun createAnswer(constraints: MediaConstraints, preferredCodec: String = "H264") {
+    private fun createAnswer(constraints: MediaConstraints, preferredCodec: String = "VP8") {
         try {
+            if (webRTCClient.peerConnection == null) {
+                Log.e("WebRTCService", "Cannot create answer: PeerConnection is null")
+                return
+            }
+            Log.d("WebRTCService", "Creating answer with codec: $preferredCodec")
             webRTCClient.peerConnection?.createAnswer(object : SdpObserver {
                 override fun onCreateSuccess(desc: SessionDescription?) {
                     if (desc == null) {
                         Log.e("WebRTCService", "Created SessionDescription is NULL")
                         return
                     }
-
                     Log.d("WebRTCService", "Original Local Answer SDP:\n${desc.description}")
-                    val modifiedSdp = normalizeSdpForCodec(desc.description, preferredCodec, 300)
+                    val modifiedSdp = normalizeSdpForCodec(desc.description, "VP8", 300)
                     Log.d("WebRTCService", "Modified Local Answer SDP:\n$modifiedSdp")
-
-                    if (!isValidSdp(modifiedSdp, preferredCodec) || !modifiedSdp.contains("m=audio")) {
+                    if (!isValidSdp(modifiedSdp, "VP8") || !modifiedSdp.contains("m=audio")) {
                         Log.e("WebRTCService", "Invalid modified SDP or no audio section, falling back to original")
                         setLocalDescription(desc)
                         return
                     }
-
                     val modifiedDesc = SessionDescription(desc.type, modifiedSdp)
                     setLocalDescription(modifiedDesc)
+                    // Отправляем answer клиенту
+                    val answerJson = JSONObject().apply {
+                        put("type", "answer")
+                        put("sdp", mapOf("type" to "answer", "sdp" to modifiedSdp))
+                    }
+                    sendMessage(answerJson) // Предполагается, что метод sendMessage отправляет JSON на сервер
                 }
-
                 override fun onCreateFailure(error: String?) {
                     Log.e("WebRTCService", "Error creating answer: $error")
                     handler.postDelayed({
                         cleanupWebRTCResources()
                         initializeWebRTC()
-                        createOffer(preferredCodec)
+                        createOffer("VP8")
                     }, 2000)
                 }
-
                 override fun onSetSuccess() {}
                 override fun onSetFailure(error: String?) {}
             }, constraints)
@@ -1006,7 +1150,7 @@ class WebRTCService : Service() {
             handler.postDelayed({
                 cleanupWebRTCResources()
                 initializeWebRTC()
-                createOffer(preferredCodec)
+                createOffer("VP8")
             }, 2000)
         }
     }
@@ -1045,17 +1189,15 @@ class WebRTCService : Service() {
                 SessionDescription.Type.fromCanonicalForm(sdp.getString("type")),
                 sdp.getString("sdp")
             )
-
+            Log.d("WebRTCService", "Received answer SDP:\n${sessionDescription.description}")
             webRTCClient.peerConnection?.setRemoteDescription(object : SdpObserver {
                 override fun onSetSuccess() {
                     Log.d("WebRTCService", "Answer accepted, connection should be established")
                 }
-
                 override fun onSetFailure(error: String) {
                     Log.e("WebRTCService", "Error setting answer: $error")
                     handler.postDelayed({ createOffer() }, 2000)
                 }
-
                 override fun onCreateSuccess(p0: SessionDescription?) {}
                 override fun onCreateFailure(error: String) {}
             }, sessionDescription)
@@ -1143,6 +1285,10 @@ class WebRTCService : Service() {
             }
             scheduleRestartWithWorkManager()
         }
+        if (isVideoTrackReceiverRegistered) {
+            unregisterReceiver(videoTrackReceiver)
+            isVideoTrackReceiverRegistered = false
+        }
 
         if (isFlashlightOn) {
             try {
@@ -1159,6 +1305,7 @@ class WebRTCService : Service() {
 
     private fun cleanupAllResources() {
         handler.removeCallbacksAndMessages(null)
+        handler.removeCallbacks(videoTrackCheckRunnable) // Добавьте эту строку
         cleanupWebRTCResources()
         if (::webSocketClient.isInitialized) {
             webSocketClient.disconnect()

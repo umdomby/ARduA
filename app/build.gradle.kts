@@ -70,7 +70,7 @@ dependencies {
 
     // Core KTX
     implementation("androidx.core:core-ktx:1.10.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
 
     // Activity Compose
     implementation("androidx.activity:activity-compose:1.7.2")
