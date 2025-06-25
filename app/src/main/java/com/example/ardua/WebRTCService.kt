@@ -177,31 +177,32 @@ class WebRTCService : Service() {
         }
     }
 
-    private val videoTrackCheckRunnable = object : Runnable {
-        override fun run() {
-            if (isConnected && ::webRTCClient.isInitialized && webRTCClient.peerConnection != null) {
-                val hasVideoTrack = currentVideoTrack?.enabled() == true && currentVideoTrack?.state() == MediaStreamTrack.State.LIVE
-                Log.d("WebRTCService", "Video track check: hasVideoTrack=$hasVideoTrack, currentVideoTrack=$currentVideoTrack")
-                if (hasVideoTrack) {
-                    currentVideoTrack?.let { track ->
-                        sharedRemoteView?.clearImage()
-                        try {
-                            track.addSink(sharedRemoteView)
-                            Log.d("WebRTCService", "Reattached video track to sharedRemoteView: ${track.id()}")
-                        } catch (e: Exception) {
-                            Log.e("WebRTCService", "Error reattaching video track: ${e.message}")
-                        }
-                        sendVideoTrackBroadcast(track.id())
-                    }
-                } else {
-                    currentVideoTrack?.let { track ->
-                        sendVideoTrackLostBroadcast(track.id())
-                    }
-                }
-            }
-            handler.postDelayed(this, 5000)
-        }
-    }
+//    private val videoTrackCheckRunnable = object : Runnable {
+//        override fun run() {
+//            if (isConnected && ::webRTCClient.isInitialized && webRTCClient.peerConnection != null) {
+//                val hasVideoTrack = currentVideoTrack?.enabled() == true && currentVideoTrack?.state() == MediaStreamTrack.State.LIVE
+//                Log.d("WebRTCService", "Video track check: hasVideoTrack=$hasVideoTrack, currentVideoTrack=$currentVideoTrack")
+//                if (hasVideoTrack) {
+//                    currentVideoTrack?.let { track ->
+//                        sharedRemoteView?.clearImage()
+//                        try {
+//                            track.addSink(sharedRemoteView)
+//                            Log.d("WebRTCService", "Reattached video track to sharedRemoteView: ${track.id()}")
+//                            sendVideoTrackBroadcast(track.id())
+//                        } catch (e: Exception) {
+//                            Log.e("WebRTCService", "Error reattaching video track: ${e.message}")
+//                        }
+//                        sendVideoTrackBroadcast(track.id())
+//                    }
+//                } else {
+//                    currentVideoTrack?.let { track ->
+//                        sendVideoTrackLostBroadcast(track.id())
+//                    }
+//                }
+//            }
+//            handler.postDelayed(this, 5000)
+//        }
+//    }
 
     private fun adjustVideoQualityBasedOnStats() {
         webRTCClient.peerConnection?.getStats { statsReport ->
@@ -294,7 +295,7 @@ class WebRTCService : Service() {
         Log.d("WebRTCService", "Service created with room: $roomName")
         sendServiceStateUpdate()
         handler.post(bandwidthEstimationRunnable)
-        handler.post(videoTrackCheckRunnable)
+//        handler.post(videoTrackCheckRunnable)
         try {
             registerReceiver(connectivityReceiver, IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION))
             isConnectivityReceiverRegistered = true
@@ -1308,7 +1309,7 @@ class WebRTCService : Service() {
 
     private fun cleanupAllResources() {
         handler.removeCallbacksAndMessages(null)
-        handler.removeCallbacks(videoTrackCheckRunnable) // Добавьте эту строку
+//        handler.removeCallbacks(videoTrackCheckRunnable) // Добавьте эту строку
         cleanupWebRTCResources()
         if (::webSocketClient.isInitialized) {
             webSocketClient.disconnect()
