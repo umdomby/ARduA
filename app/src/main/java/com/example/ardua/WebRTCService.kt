@@ -648,10 +648,18 @@ class WebRTCService : Service() {
                 Log.d("WebRTCService", "Received REQUEST_VIDEO_TRACK broadcast")
                 handler.post {
                     currentVideoTrack?.let { track ->
-                        Log.d("WebRTCService", "Reattaching video track: ${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
-                        sharedRemoteView?.clearImage() // Заменяем remoteView
-                        track.addSink(sharedRemoteView)
-                        sendVideoTrackBroadcast(track.id())
+                        if (track.enabled() && track.state() == MediaStreamTrack.State.LIVE) {
+                            sharedRemoteView?.clearImage()
+                            try {
+                                track.addSink(sharedRemoteView)
+                                Log.d("WebRTCService", "Reattached video track: ${track.id()}")
+                                sendVideoTrackBroadcast(track.id())
+                            } catch (e: Exception) {
+                                Log.e("WebRTCService", "Error reattaching video track: ${e.message}")
+                            }
+                        } else {
+                            Log.w("WebRTCService", "Video track not active: Enabled=${track.enabled()}, State=${track.state()}")
+                        }
                     } ?: Log.w("WebRTCService", "No current video track to reattach")
                 }
             }
@@ -678,15 +686,10 @@ class WebRTCService : Service() {
                 isEglBaseReleased = true
                 Log.d("WebRTCService", "EglBase released")
             }
-            if (sharedRemoteView != null) { // Заменяем remoteView
-                sharedRemoteView?.clearImage()
-                sharedRemoteView?.release()
-                Log.d("WebRTCService", "sharedRemoteView released")
-                currentVideoTrack = null
-                Log.d("WebRTCService", "Cleared current video track")
-                sharedRemoteView = null
-            }
-            Log.d("WebRTCService", "WebRTC resources cleaned up")
+            // Не очищаем sharedRemoteView полностью, только убираем видеопоток
+            sharedRemoteView?.clearImage()
+            currentVideoTrack = null
+            Log.d("WebRTCService", "Cleared current video track")
         } catch (e: Exception) {
             Log.e("WebRTCService", "Error cleaning WebRTC resources", e)
         } finally {

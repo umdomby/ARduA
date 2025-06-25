@@ -469,13 +469,28 @@ class MainActivity : ComponentActivity() {
             return
         }
         Log.d("MainActivity", "Creating new remote video dialog")
-        cleanupRemoteVideo()
 
+        // Используем sharedRemoteView из WebRTCService
         remoteView = WebRTCService.sharedRemoteView
         if (remoteView == null) {
             Log.e("MainActivity", "sharedRemoteView is null, cannot create dialog")
             showToast("Ошибка инициализации видео")
             return
+        }
+
+        // Проверяем, инициализирован ли remoteView
+        if (eglBase?.eglBaseContext == null) {
+            try {
+                remoteView?.init(eglBase?.eglBaseContext, null)
+                remoteView?.setZOrderMediaOverlay(true)
+                remoteView?.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                remoteView?.setEnableHardwareScaler(true)
+                Log.d("MainActivity", "Reinitialized sharedRemoteView")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to reinitialize sharedRemoteView: ${e.message}")
+                showToast("Ошибка инициализации видео")
+                return
+            }
         }
 
         // Удаляем remoteView из текущего родителя, если он есть
@@ -492,7 +507,7 @@ class MainActivity : ComponentActivity() {
 
         remoteVideoDialog = MaterialAlertDialogBuilder(this)
             .setTitle("Удалённое видео")
-            .setView(container) // Используем container вместо remoteView напрямую
+            .setView(container)
             .setPositiveButton("Закрыть") { _, _ ->
                 Log.d("MainActivity", "Closing remote video dialog via button")
                 cleanupRemoteVideo()
@@ -506,11 +521,12 @@ class MainActivity : ComponentActivity() {
         try {
             remoteVideoDialog?.show()
             Log.d("MainActivity", "Remote video dialog shown")
+            // Запрашиваем текущий видеопоток
             handler.postDelayed({
                 val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
                 sendBroadcast(intent)
-                Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast after delay")
-            }, 1000)
+                Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast after dialog shown")
+            }, 500)
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to show remote video dialog: ${e.message}")
             showToast("Ошибка отображения диалога")
@@ -520,25 +536,12 @@ class MainActivity : ComponentActivity() {
 
     private fun cleanupRemoteVideo() {
         Log.d("MainActivity", "Cleaning up remote video resources")
-        remoteView?.apply {
-            try {
-                clearImage()
-                release()
-                Log.d("MainActivity", "SurfaceViewRenderer released")
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Error releasing SurfaceViewRenderer: ${e.message}")
-            }
-        }
-        remoteView = null
-        if (remoteVideoDialog?.isShowing == true) {
-            try {
-                remoteVideoDialog?.dismiss()
-                Log.d("MainActivity", "Remote video dialog dismissed")
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Error dismissing remote video dialog: ${e.message}")
-            }
-        }
+        remoteVideoDialog?.dismiss()
         remoteVideoDialog = null
+        // Не очищаем remoteView полностью, так как используем sharedRemoteView
+        remoteView?.clearImage()
+        (remoteView?.parent as? ViewGroup)?.removeView(remoteView)
+        Log.d("MainActivity", "Remote video dialog dismissed, view cleared")
     }
 
     private val serviceStateReceiver = object : BroadcastReceiver() {
