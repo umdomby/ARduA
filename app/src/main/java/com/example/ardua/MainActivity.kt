@@ -36,10 +36,12 @@ import com.example.ardua.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.json.JSONArray
 import org.webrtc.EglBase
+import org.webrtc.MediaStreamTrack
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import java.util.*
 import kotlin.random.Random
+import org.webrtc.VideoTrack
 
 class MainActivity : ComponentActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -221,7 +223,21 @@ class MainActivity : ComponentActivity() {
             if (remoteVideoDialog?.isShowing == true) {
                 cleanupRemoteVideo()
             } else {
-                showRemoteVideoDialog()
+                // Отправляем команду переключения камеры
+                val intent = Intent(this, WebRTCService::class.java).apply {
+                    action = "SWITCH_CAMERA"
+                    putExtra("useBackCamera", true) // или false, в зависимости от логики
+                }
+                startService(intent)
+                // Проверяем видеопоток и открываем диалог
+                if (WebRTCService.currentVideoTrack?.enabled() == true &&
+                    WebRTCService.currentVideoTrack?.state() == org.webrtc.MediaStreamTrack.State.LIVE) {
+                    showRemoteVideoDialog()
+                } else {
+                    val requestIntent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+                    sendBroadcast(requestIntent)
+                    Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK after toggle camera")
+                }
             }
         }
 
@@ -439,21 +455,21 @@ class MainActivity : ComponentActivity() {
                 "com.example.ardua.REMOTE_VIDEO_AVAILABLE" -> {
                     val trackId = intent.getStringExtra("video_track_id") ?: "unknown"
                     Log.d("MainActivity", "Received REMOTE_VIDEO_AVAILABLE for track: $trackId")
-                    if (remoteView == null || eglBase == null) {
-                        Log.w("MainActivity", "Cannot show remote video: remoteView=$remoteView, eglBase=$eglBase")
-                        handler.postDelayed({
-                            val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
-                            sendBroadcast(intent)
-                            Log.d("MainActivity", "Retrying REQUEST_VIDEO_TRACK broadcast")
-                        }, 1000)
-                        return
+                    handler.post {
+                        if (WebRTCService.currentVideoTrack?.enabled() == true &&
+                            WebRTCService.currentVideoTrack?.state() == org.webrtc.MediaStreamTrack.State.LIVE) {
+                            showRemoteVideoDialog()
+                        } else {
+                            Log.w("MainActivity", "Video track not active, requesting again")
+                            val requestIntent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+                            sendBroadcast(requestIntent)
+                        }
                     }
-                    handler.post { showRemoteVideoDialog() } // Запускаем на главном потоке
                 }
                 "com.example.ardua.REMOTE_VIDEO_LOST" -> {
                     val trackId = intent.getStringExtra("video_track_id") ?: "unknown"
                     Log.d("MainActivity", "Received REMOTE_VIDEO_LOST for track: $trackId")
-                    handler.post { cleanupRemoteVideo() } // Запускаем на главном потоке
+                    handler.post { cleanupRemoteVideo() }
                 }
             }
         }
@@ -468,6 +484,15 @@ class MainActivity : ComponentActivity() {
             Log.d("MainActivity", "Remote video dialog already showing")
             return
         }
+        // Проверяем наличие активного видеопотока
+        if (WebRTCService.currentVideoTrack?.enabled() != true ||
+            WebRTCService.currentVideoTrack?.state() != org.webrtc.MediaStreamTrack.State.LIVE) {
+            Log.w("MainActivity", "No active video track, requesting video track")
+            val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
+            sendBroadcast(intent)
+            return
+        }
+
         Log.d("MainActivity", "Creating new remote video dialog")
 
         // Используем sharedRemoteView из WebRTCService
@@ -521,12 +546,18 @@ class MainActivity : ComponentActivity() {
         try {
             remoteVideoDialog?.show()
             Log.d("MainActivity", "Remote video dialog shown")
-            // Запрашиваем текущий видеопоток
-            handler.postDelayed({
-                val intent = Intent("com.example.ardua.REQUEST_VIDEO_TRACK")
-                sendBroadcast(intent)
-                Log.d("MainActivity", "Sent REQUEST_VIDEO_TRACK broadcast after dialog shown")
-            }, 500)
+            // Привязываем видеопоток
+            handler.post {
+                WebRTCService.currentVideoTrack?.let { track ->
+                    remoteView?.clearImage()
+                    try {
+                        track.addSink(remoteView)
+                        Log.d("MainActivity", "Video track reattached to remoteView: ${track.id()}")
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Error reattaching video track: ${e.message}")
+                    }
+                }
+            }
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to show remote video dialog: ${e.message}")
             showToast("Ошибка отображения диалога")

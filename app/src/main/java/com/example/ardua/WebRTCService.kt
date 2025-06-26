@@ -33,7 +33,8 @@ class WebRTCService : Service() {
         var currentRoomName = ""
         const val ACTION_SERVICE_STATE = "com.example.ardua.SERVICE_STATE"
         const val EXTRA_IS_RUNNING = "is_running"
-        var sharedRemoteView: SurfaceViewRenderer? = null // Добавляем sharedRemoteView
+        var sharedRemoteView: SurfaceViewRenderer? = null
+        var currentVideoTrack: VideoTrack? = null // Публичное статическое свойство
     }
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -87,7 +88,7 @@ class WebRTCService : Service() {
     private var flashlightCameraId: String? = null
     private var isFlashlightOn = false
 
-    private var currentVideoTrack: VideoTrack? = null
+
     private var isVideoTrackReceiverRegistered = false
 
     inner class LocalBinder : Binder() {
@@ -547,14 +548,15 @@ class WebRTCService : Service() {
             stream?.videoTracks?.forEach { track ->
                 Log.d("WebRTCService", "onAddStream: Video track ID=${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
                 handler.post {
-                    currentVideoTrack = track
-                    sharedRemoteView?.clearImage() // Заменяем remoteView
+                    WebRTCService.currentVideoTrack = track
+                    sharedRemoteView?.clearImage()
                     try {
                         track.addSink(sharedRemoteView)
                         Log.d("WebRTCService", "Video track added to sharedRemoteView sink")
                         sendVideoTrackBroadcast(track.id())
                     } catch (e: Exception) {
                         Log.e("WebRTCService", "Error adding video track to sink: ${e.message}")
+                        sendVideoTrackLostBroadcast(track.id())
                     }
                 }
             }
@@ -563,6 +565,10 @@ class WebRTCService : Service() {
             }
             if (stream?.videoTracks?.isEmpty() == true) {
                 Log.w("WebRTCService", "onAddStream: No video tracks in stream")
+                handler.post {
+                    WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                    WebRTCService.currentVideoTrack = null
+                }
             }
         }
 
@@ -648,7 +654,7 @@ class WebRTCService : Service() {
             if (intent.action == "com.example.ardua.REQUEST_VIDEO_TRACK") {
                 Log.d("WebRTCService", "Received REQUEST_VIDEO_TRACK broadcast")
                 handler.post {
-                    currentVideoTrack?.let { track ->
+                    WebRTCService.currentVideoTrack?.let { track ->
                         if (track.enabled() && track.state() == MediaStreamTrack.State.LIVE) {
                             sharedRemoteView?.clearImage()
                             try {
@@ -657,11 +663,26 @@ class WebRTCService : Service() {
                                 sendVideoTrackBroadcast(track.id())
                             } catch (e: Exception) {
                                 Log.e("WebRTCService", "Error reattaching video track: ${e.message}")
+                                sendVideoTrackLostBroadcast(track.id())
                             }
                         } else {
                             Log.w("WebRTCService", "Video track not active: Enabled=${track.enabled()}, State=${track.state()}")
+                            sendVideoTrackLostBroadcast(track.id())
                         }
-                    } ?: Log.w("WebRTCService", "No current video track to reattach")
+                    } ?: run {
+                        Log.w("WebRTCService", "No current video track to reattach")
+                        sendVideoTrackLostBroadcast("unknown")
+                        // Пробуем перезапустить захват видео
+                        try {
+                            webRTCClient.videoCapturer?.let { capturer ->
+                                capturer.stopCapture()
+                                capturer.startCapture(640, 480, 20)
+                                Log.d("WebRTCService", "Restarted video capture on REQUEST_VIDEO_TRACK")
+                            }
+                        } catch (e: Exception) {
+                            Log.e("WebRTCService", "Error restarting video capture: ${e.message}")
+                        }
+                    }
                 }
             }
         }
@@ -801,7 +822,7 @@ class WebRTCService : Service() {
                 put("room", roomName)
                 put("username", userName)
                 put("isLeader", true)
-                put("preferredCodec", "H264")
+                put("preferredCodec", "VP8")
             }
             webSocketClient.send(message.toString())
             Log.d("WebRTCService", "Sent join request for room: $roomName")
@@ -882,8 +903,24 @@ class WebRTCService : Service() {
                                 return@post
                             }
                             webRTCClient.switchCamera(useBackCamera)
+                            // Перезапускаем захват видео
+                            webRTCClient.videoCapturer?.let { capturer ->
+                                capturer.stopCapture()
+                                capturer.startCapture(640, 480, 20)
+                                Log.d("WebRTCService", "Video capture restarted after camera switch")
+                            }
                             Log.d("WebRTCService", "Switch camera command executed for useBackCamera=$useBackCamera")
                             sendCameraSwitchAck(useBackCamera)
+                            // Отправляем запрос на обновление видеопотока
+                            handler.postDelayed({
+                                currentVideoTrack?.let {
+                                    if (it.enabled() && it.state() == MediaStreamTrack.State.LIVE) {
+                                        sendVideoTrackBroadcast(it.id())
+                                    } else {
+                                        sendVideoTrackLostBroadcast(it.id())
+                                    }
+                                }
+                            }, 1000)
                         } catch (e: Exception) {
                             Log.e("WebRTCService", "Error switching camera: ${e.message}")
                             sendCameraSwitchAck(useBackCamera, success = false)
