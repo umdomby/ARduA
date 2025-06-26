@@ -471,6 +471,10 @@ class MainActivity : ComponentActivity() {
                     Log.d("MainActivity", "Received REMOTE_VIDEO_LOST for track: $trackId")
                     handler.post { cleanupRemoteVideo() }
                 }
+                "com.example.ardua.CONNECTION_LOST" -> {
+                    Log.d("MainActivity", "Received CONNECTION_LOST")
+                    handler.post { cleanupRemoteVideo() }
+                }
             }
         }
     }
@@ -618,6 +622,7 @@ class MainActivity : ComponentActivity() {
         val videoFilter = IntentFilter().apply {
             addAction("com.example.ardua.REMOTE_VIDEO_AVAILABLE")
             addAction("com.example.ardua.REMOTE_VIDEO_LOST")
+            addAction("com.example.ardua.CONNECTION_LOST")
         }
         registerReceiver(remoteVideoReceiver, videoFilter)
         // Обновляем состояние при возвращении в активность

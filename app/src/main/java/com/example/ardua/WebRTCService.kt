@@ -33,6 +33,7 @@ class WebRTCService : Service() {
         var currentRoomName = ""
         const val ACTION_SERVICE_STATE = "com.example.ardua.SERVICE_STATE"
         const val EXTRA_IS_RUNNING = "is_running"
+        const val ACTION_CONNECTION_LOST = "com.example.ardua.CONNECTION_LOST"
         var sharedRemoteView: SurfaceViewRenderer? = null
         var currentVideoTrack: VideoTrack? = null // Публичное статическое свойство
     }
@@ -134,6 +135,11 @@ class WebRTCService : Service() {
         override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
             Log.d("WebRTCService", "WebSocket disconnected, code: $code, reason: $reason")
             isConnected = false
+            handler.post {
+                sendConnectionLostBroadcast()
+                WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                WebRTCService.currentVideoTrack = null
+            }
             if (code != 1000) { // Если это не нормальное закрытие
                 scheduleReconnect()
             }
@@ -143,6 +149,11 @@ class WebRTCService : Service() {
             Log.e("WebRTCService", "WebSocket error: ${t.message}")
             isConnected = false
             isConnecting = false
+            handler.post {
+                sendConnectionLostBroadcast()
+                WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                WebRTCService.currentVideoTrack = null
+            }
             updateNotification("Error: ${t.message?.take(30)}...")
             scheduleReconnect()
         }
@@ -378,6 +389,11 @@ class WebRTCService : Service() {
         Log.d("WebRTCService", "Initializing new WebRTC connection")
         try {
             cleanupWebRTCResources()
+            // Отправляем CONNECTION_LOST перед инициализацией
+            sendConnectionLostBroadcast()
+            WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+            WebRTCService.currentVideoTrack = null
+
             eglBase = EglBase.create()
             isEglBaseReleased = false
             val localView = SurfaceViewRenderer(this).apply {
@@ -386,7 +402,7 @@ class WebRTCService : Service() {
                 setZOrderMediaOverlay(true)
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             }
-            sharedRemoteView = SurfaceViewRenderer(this).apply { // Заменяем remoteView
+            sharedRemoteView = SurfaceViewRenderer(this).apply {
                 try {
                     init(eglBase.eglBaseContext, null)
                     setZOrderMediaOverlay(true)
@@ -533,10 +549,20 @@ class WebRTCService : Service() {
                 }
                 PeerConnection.IceConnectionState.DISCONNECTED -> {
                     updateNotification("Connection lost")
+                    handler.post {
+                        sendConnectionLostBroadcast()
+                        WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                        WebRTCService.currentVideoTrack = null
+                    }
                     scheduleReconnect()
                 }
                 PeerConnection.IceConnectionState.FAILED -> {
                     Log.e("WebRTCService", "ICE connection failed")
+                    handler.post {
+                        sendConnectionLostBroadcast()
+                        WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                        WebRTCService.currentVideoTrack = null
+                    }
                     scheduleReconnect()
                 }
                 else -> {}
@@ -577,20 +603,28 @@ class WebRTCService : Service() {
                 Log.d("WebRTCService", "onTrack called, track kind=${track.kind()}, ID=${track.id()}, Enabled=${track.enabled()}, State=${track.state()}")
                 handler.post {
                     if (track.kind() == "video") {
-                        currentVideoTrack = track as VideoTrack
-                        sharedRemoteView?.clearImage() // Заменяем remoteView
+                        WebRTCService.currentVideoTrack = track as VideoTrack
+                        sharedRemoteView?.clearImage()
                         try {
                             (track as VideoTrack).addSink(sharedRemoteView)
                             Log.d("WebRTCService", "Video track added to sharedRemoteView sink in onTrack")
                             sendVideoTrackBroadcast(track.id())
                         } catch (e: Exception) {
                             Log.e("WebRTCService", "Error adding video track to sink in onTrack: ${e.message}")
+                            sendVideoTrackLostBroadcast(track.id())
                         }
                     } else if (track.kind() == "audio") {
                         Log.d("WebRTCService", "Audio track received, ID=${track.id()}")
                     }
                 }
-            } ?: Log.w("WebRTCService", "onTrack: No track received in transceiver")
+            } ?: run {
+                Log.w("WebRTCService", "onTrack: No track received in transceiver")
+                handler.post {
+                    WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                    WebRTCService.currentVideoTrack = null
+                    sendConnectionLostBroadcast()
+                }
+            }
         }
 
         override fun onRemoveStream(stream: MediaStream?) {
@@ -646,6 +680,12 @@ class WebRTCService : Service() {
         Log.d("WebRTCService", "Sending REMOTE_VIDEO_LOST broadcast for track: $trackId")
         val intent = Intent("com.example.ardua.REMOTE_VIDEO_LOST")
         intent.putExtra("video_track_id", trackId)
+        sendBroadcast(intent)
+    }
+
+    private fun sendConnectionLostBroadcast() {
+        Log.d("WebRTCService", "Sending CONNECTION_LOST broadcast")
+        val intent = Intent(ACTION_CONNECTION_LOST)
         sendBroadcast(intent)
     }
 
@@ -782,6 +822,11 @@ class WebRTCService : Service() {
         handler.post {
             try {
                 Log.d("WebRTCService", "Starting reconnect process")
+
+                // Отправляем CONNECTION_LOST перед пересозданием
+                sendConnectionLostBroadcast()
+                WebRTCService.currentVideoTrack?.let { sendVideoTrackLostBroadcast(it.id()) }
+                WebRTCService.currentVideoTrack = null
 
                 // Получаем последнее сохраненное имя комнаты
                 val sharedPrefs = getSharedPreferences("WebRTCPrefs", Context.MODE_PRIVATE)
