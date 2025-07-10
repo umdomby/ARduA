@@ -17,10 +17,8 @@
     <uses-permission android:name="android.permission.BROADCAST_STICKY" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
-
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-
     <uses-permission android:name="android.permission.FLASHLIGHT" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
@@ -37,7 +35,6 @@
         tools:targetApi="31"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
-        >
 
         <activity
             android:name=".MainActivity"
@@ -49,6 +46,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".MusicFilesActivity"
+            android:exported="false"
+            android:label="Music Files"
+            android:theme="@style/Theme.ARduA"/>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.example.ardua.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".WebRTCService"

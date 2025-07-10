@@ -25,6 +25,10 @@ import android.speech.tts.TextToSpeech
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import okio.BufferedSink
+import java.io.File
+import okio.buffer
+import okio.sink
 import java.util.Locale
 
 class WebRTCService : Service() {
@@ -94,6 +98,11 @@ class WebRTCService : Service() {
 
     private var isVideoTrackReceiverRegistered = false
     private var textToSpeech: TextToSpeech? = null
+
+    private var currentFileSink: BufferedSink? = null
+    private var currentFileName: String? = null
+    private var receivedSize: Long = 0
+    private var totalSize: Long = 0
 
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
@@ -954,6 +963,11 @@ class WebRTCService : Service() {
         }
     }
 
+    private fun hasEnoughStorage(size: Long): Boolean {
+        val availableSpace = filesDir.freeSpace
+        return availableSpace > size
+    }
+
     private fun handleWebSocketMessage(message: JSONObject) {
         Log.d("WebRTCService", "Received: $message")
         try {
@@ -1053,11 +1067,52 @@ class WebRTCService : Service() {
                         }
                     }
                 }
+                "file_start" -> {
+                    currentFileName = message.getString("fileName")
+                    totalSize = message.getLong("totalSize")
+                    if (!currentFileName?.endsWith(".mp3", ignoreCase = true)!!) {
+                        Log.e("WebRTCService", "Ошибка: файл $currentFileName не является MP3")
+                        return
+                    }
+                    if (!hasEnoughStorage(totalSize)) {
+                        Log.e("WebRTCService", "Недостаточно места для сохранения файла")
+                        return
+                    }
+                    receivedSize = 0
+                    val file = File(filesDir, currentFileName)
+                    currentFileSink = file.sink().buffer()
+                    Log.d("WebRTCService", "Started receiving file: $currentFileName, size: $totalSize")
+                }
+                "file_chunk" -> {
+                    val chunk = message.getJSONArray("chunk").toByteArray()
+                    currentFileSink?.write(chunk)
+                    receivedSize += chunk.size.toLong()
+                    Log.d("WebRTCService", "Received chunk, progress: $receivedSize/$totalSize")
+                }
+                "file_complete" -> {
+                    currentFileSink?.close()
+                    currentFileSink = null
+                    Log.d("WebRTCService", "File $currentFileName received successfully")
+                    // Уведомление пользователя или обработка завершения
+                    val intent = Intent("com.example.FILE_RECEIVED")
+                    intent.putExtra("fileName", currentFileName)
+                    intent.putExtra("filePath", File(filesDir, currentFileName).absolutePath)
+                    sendBroadcast(intent)
+                }
                 else -> Log.w("WebRTCService", "Unknown message type")
             }
         } catch (e: Exception) {
             Log.e("WebRTCService", "Error handling message", e)
         }
+    }
+
+    // Вспомогательная функция для конвертации JSONArray в ByteArray
+    private fun org.json.JSONArray.toByteArray(): ByteArray {
+        val byteList = mutableListOf<Byte>()
+        for (i in 0 until length()) {
+            byteList.add(getInt(i).toByte())
+        }
+        return byteList.toByteArray()
     }
 
     private fun normalizeSdpForCodec(sdp: String, targetCodec: String, targetBitrateAs: Int = 300): String {

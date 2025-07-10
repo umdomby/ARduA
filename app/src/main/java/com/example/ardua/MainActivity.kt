@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
     private var remoteView: SurfaceViewRenderer? = null
     private var eglBase: EglBase? = null
     private val handler = Handler(Looper.getMainLooper())
-
+    private lateinit var fileReceiver: BroadcastReceiver
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.CAMERA,
@@ -109,6 +109,25 @@ class MainActivity : ComponentActivity() {
 
         isServiceRunning = WebRTCService.isRunning
         updateButtonStates()
+
+        setupFileReceiver()
+    }
+
+    private fun setupFileReceiver() {
+        fileReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    "com.example.FILE_RECEIVED" -> {
+                        val fileName = intent.getStringExtra("fileName")
+                        if (fileName != null) {
+                            showToast("Получен MP3: $fileName")
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter("com.example.FILE_RECEIVED")
+        registerReceiver(fileReceiver, filter)
     }
 
     private fun loadRoomList() {
@@ -317,6 +336,10 @@ class MainActivity : ComponentActivity() {
                 return@setOnClickListener
             }
             stopWebRTCService()
+        }
+
+        binding.openMusicFilesButton.setOnClickListener {
+            startActivity(Intent(this, MusicFilesActivity::class.java))
         }
     }
 

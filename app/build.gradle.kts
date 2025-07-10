@@ -57,7 +57,10 @@ dependencies {
     implementation("io.github.webrtc-sdk:android:125.6422.07")
     // WebSocket
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
-
+    // Okio для работы с файлами
+    implementation("com.squareup.okio:okio:3.4.0")
+    // TextToSpeech (если используется)
+    implementation("androidx.core:core:1.10.1")
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 

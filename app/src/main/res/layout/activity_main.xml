@@ -154,5 +154,15 @@
             android:layout_marginStart="8dp"
             app:icon="@drawable/ic_stop"
             app:iconTint="?attr/colorOnSecondaryContainer"/>
+
+        <Button
+            android:id="@+id/openMusicFilesButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Music"
+            android:layout_marginStart="8dp"
+            app:icon="@drawable/ic_stop"
+            app:iconTint="?attr/colorOnSecondaryContainer"/>
     </LinearLayout>
 </LinearLayout>
