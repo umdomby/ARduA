@@ -346,12 +346,52 @@ class WebRTCService : Service() {
                 if (status == TextToSpeech.SUCCESS) {
                     val result = textToSpeech?.setLanguage(Locale("ru_RU"))
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        Log.e("WebRTCService", "Русский язык не поддерживается для TextToSpeech")
+                        Log.e("WebRTCService", "Русский язык не поддерживается для TextToSpeech, переключаемся на английский")
+                        textToSpeech?.setLanguage(Locale.US)
                     } else {
                         Log.d("WebRTCService", "TextToSpeech успешно инициализирован для русского языка")
+                        textToSpeech?.let { tts ->
+                            // Выводим список доступных голосов для отладки
+                            val voices = tts.voices?.filter { it.locale == Locale("ru_RU") } ?: emptyList()
+                            Log.d("WebRTCService", "Доступные голоса для ru_RU: ${voices.map { "${it.name} (Качество: ${it.quality}, Пол: ${if (it.name.contains("female", true) || it.name.contains("Standard-A") || it.name.contains("Wavenet-A")) "женский" else "мужской"})" }}")
+
+                            // Выбираем женский голос
+                            val preferredVoice = voices.firstOrNull { voice ->
+                                voice.name.contains("female", ignoreCase = true) ||
+                                        voice.name.contains("ru-RU-Standard-A") || // Женский голос Google TTS
+                                        voice.name.contains("ru-RU-Wavenet-A")
+                            } ?: voices.firstOrNull() // Если женский голос не найден, берём первый доступный
+
+                            if (preferredVoice != null) {
+                                val voiceResult = tts.setVoice(preferredVoice)
+                                if (voiceResult == TextToSpeech.SUCCESS) {
+                                    Log.d("WebRTCService", "Установлен голос: ${preferredVoice.name}")
+                                } else {
+                                    Log.e("WebRTCService", "Ошибка установки голоса ${preferredVoice.name}: $voiceResult")
+                                }
+                                // Устанавливаем скорость воспроизведения
+                                val speechRate = 1.5f // Нормальная скорость, можно изменить на 0.8f (медленнее) или 1.2f (быстрее)
+                                val rateResult = tts.setSpeechRate(speechRate)
+                                if (rateResult == TextToSpeech.SUCCESS) {
+                                    Log.d("WebRTCService", "Скорость воспроизведения установлена: $speechRate")
+                                } else {
+                                    Log.e("WebRTCService", "Ошибка установки скорости воспроизведения: $rateResult")
+                                }
+                            } else {
+                                Log.w("WebRTCService", "Голоса для ru_RU не найдены, используется голос по умолчанию")
+                                // Уведомляем UI об ошибке
+                                val intent = Intent("com.example.ardua.TTS_ERROR")
+                                intent.putExtra("message", "Голоса для ru_RU не найдены")
+                                sendBroadcast(intent)
+                            }
+                        }
                     }
                 } else {
                     Log.e("WebRTCService", "Ошибка инициализации TextToSpeech: $status")
+                    // Уведомляем UI об ошибке
+                    val intent = Intent("com.example.ardua.TTS_ERROR")
+                    intent.putExtra("message", "Ошибка инициализации TextToSpeech: $status")
+                    sendBroadcast(intent)
                 }
             }
         } catch (e: Exception) {
