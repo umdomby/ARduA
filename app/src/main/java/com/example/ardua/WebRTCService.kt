@@ -976,6 +976,19 @@ class WebRTCService : Service() {
                     Log.d("WebRTCService", "Received toggle_flashlight command")
                     handler.post { toggleFlashlight() }
                 }
+                "transcript" -> {
+                    val transcript = message.optString("data", "")
+                    val room = message.optString("room", "")
+                    Log.d("WebRTCService", "Received transcript: text='$transcript', room='$room'")
+                    handler.post {
+                        // Отправляем текст в UI через BroadcastReceiver
+                        val intent = Intent("com.example.TRANSCRIPT_RECEIVED")
+                        intent.putExtra("transcript", transcript)
+                        intent.putExtra("room", room)
+                        sendBroadcast(intent)
+                        Log.d("WebRTCService", "Broadcasted transcript: $transcript")
+                    }
+                }
                 else -> Log.w("WebRTCService", "Unknown message type")
             }
         } catch (e: Exception) {
