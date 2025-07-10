@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.util.Log
@@ -24,26 +25,76 @@ class MusicFilesActivity : AppCompatActivity() {
     private lateinit var fileReceiver: BroadcastReceiver
     private lateinit var mp3Files: MutableList<File>
     private var currentPlayingFile: File? = null
+    private lateinit var audioManager: AudioManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_music_files)
 
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         listView = findViewById(R.id.musicListView)
         updateFileList()
 
-        // Регистрируем BroadcastReceiver для получения новых файлов
+        // Регистрируем BroadcastReceiver для управления файлами
         fileReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                val fileName = intent.getStringExtra("fileName")
-                if (fileName != null) {
-                    Toast.makeText(context, "Получен MP3: $fileName", Toast.LENGTH_SHORT).show()
-                    Log.d("MusicFilesActivity", "Received file: $fileName")
-                    updateFileList()
+                when (intent.action) {
+                    "com.example.FILE_RECEIVED" -> {
+                        val fileName = intent.getStringExtra("fileName")
+                        if (fileName != null) {
+                            Toast.makeText(context, "Получен MP3: $fileName", Toast.LENGTH_SHORT).show()
+                            Log.d("MusicFilesActivity", "Received file: $fileName")
+                            updateFileList()
+                        }
+                    }
+                    "com.example.PLAY_FILE" -> {
+                        val filePath = intent.getStringExtra("filePath")
+                        if (filePath != null) {
+                            val file = File(filePath)
+                            if (file.exists()) {
+                                playMusic(file)
+                            } else {
+                                Toast.makeText(context, "Файл не найден", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    "com.example.PAUSE_FILE" -> {
+                        if (mediaPlayer?.isPlaying == true) {
+                            mediaPlayer?.pause()
+                            currentPlayingFile = null
+                            Toast.makeText(context, "Воспроизведение приостановлено", Toast.LENGTH_SHORT).show()
+                            Log.d("MusicFilesActivity", "Paused playback")
+                            updateFileList()
+                        }
+                    }
+                    "com.example.FILE_DELETED" -> {
+                        val fileName = intent.getStringExtra("fileName")
+                        if (fileName != null) {
+                            Toast.makeText(context, "Файл удалён: $fileName", Toast.LENGTH_SHORT).show()
+                            Log.d("MusicFilesActivity", "Deleted file: $fileName")
+                            if (currentPlayingFile?.name == fileName) {
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                currentPlayingFile = null
+                            }
+                            updateFileList()
+                        }
+                    }
+                    "com.example.SET_VOLUME" -> {
+                        val volume = intent.getFloatExtra("volume", 1.0f)
+                        mediaPlayer?.setVolume(volume, volume)
+                        Log.d("MusicFilesActivity", "Set volume to: $volume")
+                    }
                 }
             }
         }
-        val filter = IntentFilter("com.example.FILE_RECEIVED")
+        val filter = IntentFilter().apply {
+            addAction("com.example.FILE_RECEIVED")
+            addAction("com.example.PLAY_FILE")
+            addAction("com.example.PAUSE_FILE")
+            addAction("com.example.FILE_DELETED")
+            addAction("com.example.SET_VOLUME")
+        }
         registerReceiver(fileReceiver, filter)
     }
 
@@ -65,16 +116,14 @@ class MusicFilesActivity : AppCompatActivity() {
     private fun playMusic(file: File) {
         try {
             if (currentPlayingFile == file && mediaPlayer?.isPlaying == true) {
-                // Если файл уже воспроизводится, приостанавливаем
                 mediaPlayer?.pause()
                 currentPlayingFile = null
                 Toast.makeText(this, "Приостановлено: ${file.name}", Toast.LENGTH_SHORT).show()
                 Log.d("MusicFilesActivity", "Paused: ${file.name}")
-                updateFileList() // Обновляем UI для смены иконки
+                updateFileList()
                 return
             }
 
-            // Останавливаем предыдущее воспроизведение
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
@@ -84,7 +133,7 @@ class MusicFilesActivity : AppCompatActivity() {
                     Toast.makeText(this@MusicFilesActivity, "Воспроизведение завершено: ${file.name}", Toast.LENGTH_SHORT).show()
                     Log.d("MusicFilesActivity", "Completed: ${file.name}")
                     currentPlayingFile = null
-                    updateFileList() // Обновляем UI для смены иконки
+                    updateFileList()
                 }
                 setOnErrorListener { _, what, extra ->
                     Log.e("MusicFilesActivity", "MediaPlayer error: what=$what, extra=$extra")
@@ -97,7 +146,7 @@ class MusicFilesActivity : AppCompatActivity() {
             currentPlayingFile = file
             Toast.makeText(this, "Воспроизведение: ${file.name}", Toast.LENGTH_SHORT).show()
             Log.d("MusicFilesActivity", "Playing: ${file.name}")
-            updateFileList() // Обновляем UI для смены иконки
+            updateFileList()
         } catch (e: Exception) {
             Log.e("MusicFilesActivity", "Error playing file ${file.name}: ${e.message}")
             Toast.makeText(this, "Ошибка воспроизведения: ${e.message}", Toast.LENGTH_LONG).show()
@@ -125,7 +174,6 @@ class MusicFilesActivity : AppCompatActivity() {
             val playButton = view.findViewById<MaterialButton>(R.id.playButton)
 
             fileNameTextView.text = file.name
-            // Устанавливаем иконку в зависимости от состояния воспроизведения
             playButton.setIconResource(
                 if (file == currentPlayingFile && mediaPlayer?.isPlaying == true)
                     android.R.drawable.ic_media_pause

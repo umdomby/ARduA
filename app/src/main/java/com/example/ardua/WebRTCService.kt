@@ -29,6 +29,7 @@ import okio.BufferedSink
 import java.io.File
 import okio.buffer
 import okio.sink
+import org.json.JSONArray
 import java.util.Locale
 
 class WebRTCService : Service() {
@@ -1093,11 +1094,88 @@ class WebRTCService : Service() {
                     currentFileSink?.close()
                     currentFileSink = null
                     Log.d("WebRTCService", "File $currentFileName received successfully")
-                    // Уведомление пользователя или обработка завершения
                     val intent = Intent("com.example.FILE_RECEIVED")
                     intent.putExtra("fileName", currentFileName)
                     intent.putExtra("filePath", File(filesDir, currentFileName).absolutePath)
                     sendBroadcast(intent)
+                }
+                "file_list_request" -> {
+                    val files = filesDir.listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
+                    val fileList = files?.map { mapOf("name" to it.name, "size" to it.length()) } ?: emptyList()
+                    val response = JSONObject().apply {
+                        put("type", "file_list_response")
+                        put("files", JSONArray(fileList))
+                        put("room", message.getString("room"))
+                        put("username", message.getString("username"))
+                        if (message.has("requestor")) {
+                            put("requestor", message.getString("requestor"))
+                        }
+                    }
+                    Log.d("WebRTCService", "Sending file list response: $response")
+                    webSocketClient?.send(response.toString())
+                    Log.d("WebRTCService", "Sent file list: ${fileList.size} files")
+                }
+                "play_file" -> {
+                    val fileName = message.getString("fileName")
+                    val file = File(filesDir, fileName)
+                    if (file.exists() && file.name.endsWith(".mp3", ignoreCase = true)) {
+                        val intent = Intent("com.example.PLAY_FILE")
+                        intent.putExtra("fileName", fileName)
+                        intent.putExtra("filePath", file.absolutePath)
+                        sendBroadcast(intent)
+                        webSocketClient?.send(JSONObject().apply {
+                            put("type", "file_status")
+                            put("status", "playing")
+                            put("fileName", fileName)
+                        }.toString())
+                        Log.d("WebRTCService", "Playing file: $fileName")
+                    } else {
+                        webSocketClient?.send(JSONObject().apply {
+                            put("type", "error")
+                            put("data", "File $fileName not found or not MP3")
+                        }.toString())
+                        Log.e("WebRTCService", "File $fileName not found or not MP3")
+                    }
+                }
+                "pause_file" -> {
+                    val intent = Intent("com.example.PAUSE_FILE")
+                    sendBroadcast(intent)
+                    webSocketClient?.send(JSONObject().apply {
+                        put("type", "file_status")
+                        put("status", "paused")
+                    }.toString())
+                    Log.d("WebRTCService", "Paused playback")
+                }
+                "delete_file" -> {
+                    val fileName = message.getString("fileName")
+                    val file = File(filesDir, fileName)
+                    if (file.exists()) {
+                        if (file.delete()) {
+                            val intent = Intent("com.example.FILE_DELETED")
+                            intent.putExtra("fileName", fileName)
+                            sendBroadcast(intent)
+                            Log.d("WebRTCService", "Deleted file: $fileName")
+                        } else {
+                            webSocketClient?.send(JSONObject().apply {
+                                put("type", "error")
+                                put("data", "Failed to delete file $fileName")
+                            }.toString())
+                            Log.e("WebRTCService", "Failed to delete file: $fileName")
+                        }
+                    } else {
+                        webSocketClient?.send(JSONObject().apply {
+                            put("type", "error")
+                            put("data", "File $fileName not found")
+                        }.toString())
+                        Log.e("WebRTCService", "File $fileName not found")
+                    }
+                }
+                "set_volume" -> {
+                    val volume = message.getDouble("volume").toFloat()
+                    val intent = Intent("com.example.SET_VOLUME")
+                    intent.putExtra("volume", volume)
+                    sendBroadcast(intent)
+                    Log.d("WebRTCService", "Set volume to: $volume")
                 }
                 else -> Log.w("WebRTCService", "Unknown message type")
             }
