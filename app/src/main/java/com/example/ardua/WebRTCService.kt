@@ -1073,10 +1073,28 @@ class WebRTCService : Service() {
                     totalSize = message.getLong("totalSize")
                     if (!currentFileName?.endsWith(".mp3", ignoreCase = true)!!) {
                         Log.e("WebRTCService", "Ошибка: файл $currentFileName не является MP3")
+                        webSocketClient?.send(JSONObject().apply {
+                            put("type", "error")
+                            put("data", "File $currentFileName is not MP3")
+                            put("room", message.getString("room"))
+                            put("username", message.getString("username"))
+                            if (message.has("requestor")) {
+                                put("requestor", message.getString("requestor"))
+                            }
+                        }.toString())
                         return
                     }
                     if (!hasEnoughStorage(totalSize)) {
                         Log.e("WebRTCService", "Недостаточно места для сохранения файла")
+                        webSocketClient?.send(JSONObject().apply {
+                            put("type", "error")
+                            put("data", "Insufficient storage for file")
+                            put("room", message.getString("room"))
+                            put("username", message.getString("username"))
+                            if (message.has("requestor")) {
+                                put("requestor", message.getString("requestor"))
+                            }
+                        }.toString())
                         return
                     }
                     receivedSize = 0
@@ -1098,6 +1116,21 @@ class WebRTCService : Service() {
                     intent.putExtra("fileName", currentFileName)
                     intent.putExtra("filePath", File(filesDir, currentFileName).absolutePath)
                     sendBroadcast(intent)
+                    // Отправляем обновлённый список файлов
+                    val files = filesDir.listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
+                    val fileList = files?.map { mapOf("name" to it.name, "size" to it.length()) } ?: emptyList()
+                    val response = JSONObject().apply {
+                        put("type", "file_list_response")
+                        put("files", JSONArray(fileList))
+                        put("room", message.getString("room"))
+                        put("username", message.getString("username"))
+                        if (message.has("requestor")) {
+                            put("requestor", message.getString("requestor"))
+                        }
+                    }
+                    Log.d("WebRTCService", "Sending file list response after file_complete: $response")
+                    webSocketClient?.send(response.toString())
+                    Log.d("WebRTCService", "Sent file list: ${fileList.size} files")
                 }
                 "file_list_request" -> {
                     val files = filesDir.listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
@@ -1127,12 +1160,22 @@ class WebRTCService : Service() {
                             put("type", "file_status")
                             put("status", "playing")
                             put("fileName", fileName)
+                            put("room", message.getString("room"))
+                            put("username", message.getString("username"))
+                            if (message.has("requestor")) {
+                                put("requestor", message.getString("requestor"))
+                            }
                         }.toString())
                         Log.d("WebRTCService", "Playing file: $fileName")
                     } else {
                         webSocketClient?.send(JSONObject().apply {
                             put("type", "error")
                             put("data", "File $fileName not found or not MP3")
+                            put("room", message.getString("room"))
+                            put("username", message.getString("username"))
+                            if (message.has("requestor")) {
+                                put("requestor", message.getString("requestor"))
+                            }
                         }.toString())
                         Log.e("WebRTCService", "File $fileName not found or not MP3")
                     }
@@ -1143,6 +1186,11 @@ class WebRTCService : Service() {
                     webSocketClient?.send(JSONObject().apply {
                         put("type", "file_status")
                         put("status", "paused")
+                        put("room", message.getString("room"))
+                        put("username", message.getString("username"))
+                        if (message.has("requestor")) {
+                            put("requestor", message.getString("requestor"))
+                        }
                     }.toString())
                     Log.d("WebRTCService", "Paused playback")
                 }
@@ -1155,10 +1203,30 @@ class WebRTCService : Service() {
                             intent.putExtra("fileName", fileName)
                             sendBroadcast(intent)
                             Log.d("WebRTCService", "Deleted file: $fileName")
+                            // Отправляем обновлённый список файлов
+                            val files = filesDir.listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
+                            val fileList = files?.map { mapOf("name" to it.name, "size" to it.length()) } ?: emptyList()
+                            val response = JSONObject().apply {
+                                put("type", "file_list_response")
+                                put("files", JSONArray(fileList))
+                                put("room", message.getString("room"))
+                                put("username", message.getString("username"))
+                                if (message.has("requestor")) {
+                                    put("requestor", message.getString("requestor"))
+                                }
+                            }
+                            Log.d("WebRTCService", "Sending file list response after delete_file: $response")
+                            webSocketClient?.send(response.toString())
+                            Log.d("WebRTCService", "Sent file list: ${fileList.size} files")
                         } else {
                             webSocketClient?.send(JSONObject().apply {
                                 put("type", "error")
                                 put("data", "Failed to delete file $fileName")
+                                put("room", message.getString("room"))
+                                put("username", message.getString("username"))
+                                if (message.has("requestor")) {
+                                    put("requestor", message.getString("requestor"))
+                                }
                             }.toString())
                             Log.e("WebRTCService", "Failed to delete file: $fileName")
                         }
@@ -1166,6 +1234,11 @@ class WebRTCService : Service() {
                         webSocketClient?.send(JSONObject().apply {
                             put("type", "error")
                             put("data", "File $fileName not found")
+                            put("room", message.getString("room"))
+                            put("username", message.getString("username"))
+                            if (message.has("requestor")) {
+                                put("requestor", message.getString("requestor"))
+                            }
                         }.toString())
                         Log.e("WebRTCService", "File $fileName not found")
                     }
@@ -1176,6 +1249,17 @@ class WebRTCService : Service() {
                     intent.putExtra("volume", volume)
                     sendBroadcast(intent)
                     Log.d("WebRTCService", "Set volume to: $volume")
+                    webSocketClient?.send(JSONObject().apply {
+                        put("type", "volume_status")
+                        put("status", "set")
+                        put("volume", volume)
+                        put("room", message.getString("room"))
+                        put("username", message.getString("username"))
+                        if (message.has("requestor")) {
+                            put("requestor", message.getString("requestor"))
+                        }
+                    }.toString())
+                    Log.d("WebRTCService", "Sent volume_status: $volume")
                 }
                 else -> Log.w("WebRTCService", "Unknown message type")
             }
