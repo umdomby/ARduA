@@ -9,6 +9,8 @@ import android.content.pm.ServiceInfo
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.*
@@ -104,6 +106,10 @@ class WebRTCService : Service() {
     private var currentFileName: String? = null
     private var receivedSize: Long = 0
     private var totalSize: Long = 0
+
+    private var mediaPlayer: MediaPlayer? = null
+    private var currentPlayingFile: File? = null
+    private lateinit var audioManager: AudioManager
 
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
@@ -296,7 +302,7 @@ class WebRTCService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         // Инициализация имени комнаты из статического поля
         roomName = currentRoomName
 
@@ -969,6 +975,76 @@ class WebRTCService : Service() {
         return availableSpace > size
     }
 
+    private fun playMusic(file: File, message: JSONObject) {
+        try {
+            if (currentPlayingFile == file && mediaPlayer?.isPlaying == true) {
+                mediaPlayer?.pause()
+                currentPlayingFile = null
+                Log.d("WebRTCService", "Paused: ${file.name}")
+                webSocketClient?.send(JSONObject().apply {
+                    put("type", "file_status")
+                    put("status", "paused")
+                    put("fileName", file.name)
+                    put("room", message.getString("room"))
+                    put("username", message.getString("username"))
+                    if (message.has("requestor")) {
+                        put("requestor", message.getString("requestor"))
+                    }
+                }.toString())
+                return
+            }
+
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                prepare()
+                start()
+                setOnCompletionListener {
+                    Log.d("WebRTCService", "Completed: ${file.name}")
+                    currentPlayingFile = null
+                    webSocketClient?.send(JSONObject().apply {
+                        put("type", "file_status")
+                        put("status", "stopped")
+                        put("fileName", file.name)
+                        put("room", message.getString("room"))
+                        put("username", message.getString("username"))
+                        if (message.has("requestor")) {
+                            put("requestor", message.getString("requestor"))
+                        }
+                    }.toString())
+                }
+                setOnErrorListener { _, what, extra ->
+                    Log.e("WebRTCService", "MediaPlayer error: what=$what, extra=$extra")
+                    currentPlayingFile = null
+                    webSocketClient?.send(JSONObject().apply {
+                        put("type", "error")
+                        put("data", "Error playing file ${file.name}: MediaPlayer error")
+                        put("room", message.getString("room"))
+                        put("username", message.getString("username"))
+                        if (message.has("requestor")) {
+                            put("requestor", message.getString("requestor"))
+                        }
+                    }.toString())
+                    true
+                }
+            }
+            currentPlayingFile = file
+            Log.d("WebRTCService", "Playing: ${file.name}")
+        } catch (e: Exception) {
+            Log.e("WebRTCService", "Error playing file ${file.name}: ${e.message}")
+            currentPlayingFile = null
+            webSocketClient?.send(JSONObject().apply {
+                put("type", "error")
+                put("data", "Error playing file ${file.name}: ${e.message}")
+                put("room", message.getString("room"))
+                put("username", message.getString("username"))
+                if (message.has("requestor")) {
+                    put("requestor", message.getString("requestor"))
+                }
+            }.toString())
+        }
+    }
+
     private fun handleWebSocketMessage(message: JSONObject) {
         Log.d("WebRTCService", "Received: $message")
         try {
@@ -1152,10 +1228,7 @@ class WebRTCService : Service() {
                     val fileName = message.getString("fileName")
                     val file = File(filesDir, fileName)
                     if (file.exists() && file.name.endsWith(".mp3", ignoreCase = true)) {
-                        val intent = Intent("com.example.PLAY_FILE")
-                        intent.putExtra("fileName", fileName)
-                        intent.putExtra("filePath", file.absolutePath)
-                        sendBroadcast(intent)
+                        playMusic(file, message)
                         webSocketClient?.send(JSONObject().apply {
                             put("type", "file_status")
                             put("status", "playing")
@@ -1181,24 +1254,31 @@ class WebRTCService : Service() {
                     }
                 }
                 "pause_file" -> {
-                    val intent = Intent("com.example.PAUSE_FILE")
-                    sendBroadcast(intent)
-                    webSocketClient?.send(JSONObject().apply {
-                        put("type", "file_status")
-                        put("status", "paused")
-                        put("room", message.getString("room"))
-                        put("username", message.getString("username"))
-                        if (message.has("requestor")) {
-                            put("requestor", message.getString("requestor"))
-                        }
-                    }.toString())
-                    Log.d("WebRTCService", "Paused playback")
+                    if (mediaPlayer?.isPlaying == true) {
+                        mediaPlayer?.pause()
+                        currentPlayingFile = null
+                        webSocketClient?.send(JSONObject().apply {
+                            put("type", "file_status")
+                            put("status", "paused")
+                            put("room", message.getString("room"))
+                            put("username", message.getString("username"))
+                            if (message.has("requestor")) {
+                                put("requestor", message.getString("requestor"))
+                            }
+                        }.toString())
+                        Log.d("WebRTCService", "Paused playback")
+                    }
                 }
                 "delete_file" -> {
                     val fileName = message.getString("fileName")
                     val file = File(filesDir, fileName)
                     if (file.exists()) {
                         if (file.delete()) {
+                            if (currentPlayingFile?.name == fileName) {
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                currentPlayingFile = null
+                            }
                             val intent = Intent("com.example.FILE_DELETED")
                             intent.putExtra("fileName", fileName)
                             sendBroadcast(intent)
@@ -1245,10 +1325,7 @@ class WebRTCService : Service() {
                 }
                 "set_volume" -> {
                     val volume = message.getDouble("volume").toFloat()
-                    val intent = Intent("com.example.SET_VOLUME")
-                    intent.putExtra("volume", volume)
-                    sendBroadcast(intent)
-                    Log.d("WebRTCService", "Set volume to: $volume")
+                    mediaPlayer?.setVolume(volume, volume)
                     webSocketClient?.send(JSONObject().apply {
                         put("type", "volume_status")
                         put("status", "set")
@@ -1259,7 +1336,7 @@ class WebRTCService : Service() {
                             put("requestor", message.getString("requestor"))
                         }
                     }.toString())
-                    Log.d("WebRTCService", "Sent volume_status: $volume")
+                    Log.d("WebRTCService", "Set volume to: $volume")
                 }
                 else -> Log.w("WebRTCService", "Unknown message type")
             }
@@ -1696,6 +1773,9 @@ class WebRTCService : Service() {
         if (::webSocketClient.isInitialized) {
             webSocketClient.disconnect()
         }
+        mediaPlayer?.release()
+        mediaPlayer = null
+        currentPlayingFile = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
