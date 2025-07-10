@@ -21,9 +21,11 @@ import org.webrtc.*
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 import android.net.NetworkRequest
+import android.speech.tts.TextToSpeech
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import java.util.Locale
 
 class WebRTCService : Service() {
 
@@ -91,6 +93,7 @@ class WebRTCService : Service() {
 
 
     private var isVideoTrackReceiverRegistered = false
+    private var textToSpeech: TextToSpeech? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
@@ -338,6 +341,18 @@ class WebRTCService : Service() {
                 }
             } catch (e: CameraAccessException) {
                 Log.e("WebRTCService", "Ошибка доступа к CameraManager: ${e.message}")
+            }
+            textToSpeech = TextToSpeech(this) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    val result = textToSpeech?.setLanguage(Locale("ru_RU"))
+                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        Log.e("WebRTCService", "Русский язык не поддерживается для TextToSpeech")
+                    } else {
+                        Log.d("WebRTCService", "TextToSpeech успешно инициализирован для русского языка")
+                    }
+                } else {
+                    Log.e("WebRTCService", "Ошибка инициализации TextToSpeech: $status")
+                }
             }
         } catch (e: Exception) {
             Log.e("WebRTCService", "Initialization failed", e)
@@ -987,6 +1002,15 @@ class WebRTCService : Service() {
                         intent.putExtra("room", room)
                         sendBroadcast(intent)
                         Log.d("WebRTCService", "Broadcasted transcript: $transcript")
+                        if (transcript.isNotEmpty()) {
+                            textToSpeech?.let { tts ->
+                                if (tts.isSpeaking) {
+                                    tts.stop()
+                                }
+                                tts.speak(transcript, TextToSpeech.QUEUE_FLUSH, null, "transcript_${System.currentTimeMillis()}")
+                                Log.d("WebRTCService", "Синтезирован текст: $transcript")
+                            } ?: Log.w("WebRTCService", "TextToSpeech не инициализирован, текст не синтезирован")
+                        }
                     }
                 }
                 else -> Log.w("WebRTCService", "Unknown message type")
@@ -1399,6 +1423,12 @@ class WebRTCService : Service() {
             }
         }
 
+        textToSpeech?.let {
+            it.stop()
+            it.shutdown()
+            textToSpeech = null
+            Log.d("WebRTCService", "TextToSpeech остановлен и очищен")
+        }
         super.onDestroy()
     }
 
