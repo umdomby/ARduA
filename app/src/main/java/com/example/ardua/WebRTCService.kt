@@ -111,6 +111,8 @@ class WebRTCService : Service() {
     private var currentPlayingFile: File? = null
     private lateinit var audioManager: AudioManager
 
+    private var isFileTransferring = false
+
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
     }
@@ -174,6 +176,15 @@ class WebRTCService : Service() {
                 WebRTCService.currentVideoTrack = null
             }
             updateNotification("Error: ${t.message?.take(30)}...")
+            if (isFileTransferring) {
+                Log.w("WebRTCService", "WebSocket failed during file transfer, notifying client")
+                webSocketClient?.send(JSONObject().apply {
+                    put("type", "error")
+                    put("data", "WebSocket connection lost during file transfer")
+                    put("room", roomName)
+                    put("username", userName)
+                }.toString())
+            }
             scheduleReconnect()
         }
     }
@@ -201,10 +212,10 @@ class WebRTCService : Service() {
 
     private val bandwidthEstimationRunnable = object : Runnable {
         override fun run() {
-            if (isConnected) {
+            if (isConnected && !isFileTransferring) { // Пропускаем, если идёт передача файла
                 adjustVideoQualityBasedOnStats()
             }
-            handler.postDelayed(this, 10000) // Каждые 10 секунд
+            handler.postDelayed(this, 10000)
         }
     }
 
@@ -1145,6 +1156,7 @@ class WebRTCService : Service() {
                     }
                 }
                 "file_start" -> {
+                    isFileTransferring = true // Устанавливаем флаг
                     currentFileName = message.getString("fileName")
                     totalSize = message.getLong("totalSize")
                     if (!currentFileName?.endsWith(".mp3", ignoreCase = true)!!) {
@@ -1187,6 +1199,7 @@ class WebRTCService : Service() {
                 "file_complete" -> {
                     currentFileSink?.close()
                     currentFileSink = null
+                    isFileTransferring = false
                     Log.d("WebRTCService", "File $currentFileName received successfully")
                     val intent = Intent("com.example.FILE_RECEIVED")
                     intent.putExtra("fileName", currentFileName)
@@ -1207,6 +1220,22 @@ class WebRTCService : Service() {
                     Log.d("WebRTCService", "Sending file list response after file_complete: $response")
                     webSocketClient?.send(response.toString())
                     Log.d("WebRTCService", "Sent file list: ${fileList.size} files")
+                    // Проверяем и восстанавливаем видеопоток
+                    handler.postDelayed({
+                        if (webRTCClient.peerConnection?.iceConnectionState() != PeerConnection.IceConnectionState.CONNECTED) {
+                            Log.w("WebRTCService", "ICE connection not active after file transfer, reinitializing")
+                            cleanupWebRTCResources()
+                            initializeWebRTC()
+                            createOffer("VP8")
+                        } else if (currentVideoTrack == null || currentVideoTrack?.state() != MediaStreamTrack.State.LIVE) {
+                            Log.w("WebRTCService", "Video track not active after file transfer, restarting capture")
+                            webRTCClient.videoCapturer?.let { capturer ->
+                                capturer.stopCapture()
+                                capturer.startCapture(640, 480, 20)
+                                Log.d("WebRTCService", "Restarted video capture after file transfer")
+                            }
+                        }
+                    }, 2000)
                 }
                 "file_list_request" -> {
                     val files = filesDir.listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
