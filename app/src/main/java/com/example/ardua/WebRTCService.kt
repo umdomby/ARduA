@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.ConnectivityManager
@@ -83,7 +84,7 @@ class WebRTCService : Service() {
     private var roomName = "room1" // Будет перезаписано при старте
     private val userName = Build.MODEL ?: "AndroidDevice"
     //private val webSocketUrl = "wss://ardua.site/wsgo"
-    private val webSocketUrl = "wss://ardua.site:444/wsgo"
+    private val webSocketUrl = "wss://ardua.site/wsgo"
 
     private val notificationId = 1
     private val channelId = "webrtc_service_channel"
@@ -314,6 +315,8 @@ class WebRTCService : Service() {
         super.onCreate()
         isRunning = true
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager.isSpeakerphoneOn = true
         // Инициализация имени комнаты из статического поля
         roomName = currentRoomName
 
@@ -370,6 +373,12 @@ class WebRTCService : Service() {
                 Log.e("WebRTCService", "Ошибка доступа к CameraManager: ${e.message}")
             }
             textToSpeech = TextToSpeech(this) { status ->
+                textToSpeech?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
                 if (status == TextToSpeech.SUCCESS) {
                     val result = textToSpeech?.setLanguage(Locale("ru_RU"))
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -1008,6 +1017,12 @@ class WebRTCService : Service() {
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
                 prepare()
                 start()
                 setOnCompletionListener {
@@ -1830,6 +1845,9 @@ class WebRTCService : Service() {
                 }
 
                 currentRoomName = roomName
+
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                audioManager.isSpeakerphoneOn = true
 
                 Log.d("WebRTCService", "Starting service with room: $roomName")
 
