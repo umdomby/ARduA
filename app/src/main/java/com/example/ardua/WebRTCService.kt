@@ -1,6 +1,8 @@
 package com.example.ardua
 import android.annotation.SuppressLint
 import android.app.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -10,6 +12,7 @@ import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.ConnectivityManager
@@ -114,6 +117,42 @@ class WebRTCService : Service() {
 
     private var isFileTransferring = false
 
+    private var isBluetoothReceiverRegistered = false
+    private var isBluetoothConnected = false
+
+    private fun isBluetoothA2DPConnected(): Boolean {
+        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return false
+        try {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val isA2dpConnected = devices.any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+            val isA2dpOn = audioManager.isBluetoothA2dpOn
+            Log.d("WebRTCService", "Bluetooth A2DP check: devicesConnected=$isA2dpConnected, isA2dpOn=$isA2dpOn")
+            return isA2dpConnected && isA2dpOn
+        } catch (e: Exception) {
+            Log.e("WebRTCService", "Ошибка проверки Bluetooth A2DP: ${e.message}")
+            return false
+        }
+    }
+
+    private fun updateAudioRouting() {
+        audioManager.mode = AudioManager.MODE_NORMAL // Используем MODE_NORMAL для музыки
+        isBluetoothConnected = isBluetoothA2DPConnected()
+
+        if (isBluetoothConnected) {
+            audioManager.isBluetoothA2dpOn = true // Включаем Bluetooth A2DP
+            audioManager.isSpeakerphoneOn = false // Отключаем громкую связь
+            Log.d("WebRTCService", "Аудио перенаправлено на Bluetooth A2DP")
+        } else {
+            audioManager.isBluetoothA2dpOn = false // Отключаем A2DP
+            audioManager.isSpeakerphoneOn = true // Включаем громкий динамик
+            Log.d("WebRTCService", "Аудио перенаправлено на громкий динамик")
+        }
+
+        // Периодическая проверка каждые 5 секунд
+        handler.postDelayed({ updateAudioRouting() }, 5000)
+    }
+
     inner class LocalBinder : Binder() {
         fun getService(): WebRTCService = this@WebRTCService
     }
@@ -124,6 +163,20 @@ class WebRTCService : Service() {
         override fun onReceive(context: Context, intent: Intent) {
             if (!isInitialized() || !webSocketClient.isConnected()) {
                 reconnect()
+            }
+        }
+    }
+
+    private val bluetoothReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    Log.d("WebRTCService", "Bluetooth state changed: $state")
+                    if (state == BluetoothAdapter.STATE_ON || state == BluetoothAdapter.STATE_OFF) {
+                        updateAudioRouting()
+                    }
+                }
             }
         }
     }
@@ -315,8 +368,16 @@ class WebRTCService : Service() {
         super.onCreate()
         isRunning = true
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioManager.isSpeakerphoneOn = true
+        audioManager.mode = AudioManager.MODE_NORMAL // Устанавливаем MODE_NORMAL
+        audioManager.isBluetoothA2dpOn = true // Активируем A2DP
+        updateAudioRouting()
+        registerReceiver(
+            bluetoothReceiver,
+            IntentFilter().apply {
+                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            }
+        )
+        isBluetoothReceiverRegistered = true
         // Инициализация имени комнаты из статического поля
         roomName = currentRoomName
 
@@ -1021,9 +1082,11 @@ class WebRTCService : Service() {
                     AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setLegacyStreamType(AudioManager.STREAM_MUSIC)
                         .build()
                 )
                 prepare()
+                updateAudioRouting() // Убедимся, что аудио идет на правильное устройство
                 start()
                 setOnCompletionListener {
                     Log.d("WebRTCService", "Completed: ${file.name}")
@@ -1790,7 +1853,6 @@ class WebRTCService : Service() {
             unregisterReceiver(videoTrackReceiver)
             isVideoTrackReceiverRegistered = false
         }
-
         if (isFlashlightOn) {
             try {
                 flashlightCameraId?.let { cameraManager.setTorchMode(it, false) }
@@ -1800,12 +1862,19 @@ class WebRTCService : Service() {
                 Log.e("WebRTCService", "Ошибка выключения фонарика: ${e.message}")
             }
         }
-
         textToSpeech?.let {
             it.stop()
             it.shutdown()
             textToSpeech = null
             Log.d("WebRTCService", "TextToSpeech остановлен и очищен")
+        }
+        audioManager.isBluetoothA2dpOn = false // Отключаем A2DP
+        audioManager.isSpeakerphoneOn = false // Отключаем громкую связь
+        audioManager.mode = AudioManager.MODE_NORMAL // Сбрасываем режим
+        handler.removeCallbacksAndMessages(null)
+        if (isBluetoothReceiverRegistered) {
+            unregisterReceiver(bluetoothReceiver)
+            isBluetoothReceiverRegistered = false
         }
         super.onDestroy()
     }
@@ -1846,8 +1915,7 @@ class WebRTCService : Service() {
 
                 currentRoomName = roomName
 
-                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                audioManager.isSpeakerphoneOn = true
+                updateAudioRouting()
 
                 Log.d("WebRTCService", "Starting service with room: $roomName")
 
