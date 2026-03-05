@@ -24,7 +24,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false // Отключено для отладки
+            isMinifyEnabled = true          // ← обязательно true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -34,6 +35,21 @@ android {
             isMinifyEnabled = false
         }
     }
+    externalNativeBuild {
+        cmake {
+            // Путь к твоему CMakeLists.txt относительно корня модуля app
+            // Если файл лежит в app/src/main/cpp/CMakeLists.txt — используй именно этот вариант
+            path = file("src/main/cpp/CMakeLists.txt")
+
+            // Опционально: версия CMake (если хочешь зафиксировать, иначе Gradle возьмёт из SDK)
+            // version = "3.22.1"  // пример, если нужно
+
+            // Опционально: аргументы, которые передаются в CMake (для флагов компиляции и т.д.)
+            // arguments += "-DCMAKE_VERBOSE_MAKEFILE=ON"  // для отладки, если сборка падает
+            // arguments += "-DANDROID_STL=c++_shared"     // если используешь STL
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

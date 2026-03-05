@@ -101,6 +101,8 @@ class MainActivity : ComponentActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        Log.d("NativeTest", stringFromJNI())
+
         sharedPreferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         setupRemoteVideoReceiver() // Инициализация EglBase
         loadRoomList()
@@ -112,6 +114,8 @@ class MainActivity : ComponentActivity() {
 
         setupFileReceiver()
     }
+
+    external fun stringFromJNI(): String
 
     private fun setupFileReceiver() {
         fileReceiver = object : BroadcastReceiver() {
@@ -672,6 +676,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        init {
+            System.loadLibrary("native-lib")  // имя из add_library
+        }
         private const val PREFS_NAME = "WebRTCPrefs"
         private const val ROOM_LIST_KEY = "room_list"
         private const val LAST_USED_ROOM_KEY = "last_used_room"
